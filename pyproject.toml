@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autowrec"
+dynamic = ["version"]
+description = "Record browser sessions and expose them as MCP tools for AI-powered automation."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [
+    { name = "Kanishq Vijay", email = "stonesteel27@gmail.com" },
+]
+keywords = ["automation", "data-extraction", "browser-automation", "mcp", "recording", "reverse-engineering"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+dependencies = [
+    "pydantic~=2.12.5",
+    "python-dotenv~=1.2.1",
+    "rich>=13.0.0",
+    "zendriver~=0.15.2",
+    "mss~=10.1.0",
+    "numpy~=2.4.0",
+    "imageio-ffmpeg~=0.6.0",
+    "requests~=2.32.5",
+    "curl_cffi~=0.14.0",
+    "beautifulsoup4~=4.14.3",
+    "magika~=1.0.1",
+    "ipython~=9.10.0",
+    "fastmcp>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/steathy/AutoWrec"
+Repository = "https://github.com/steathy/AutoWrec"
+Issues = "https://github.com/steathy/AutoWrec/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit>=3.6.0",
+    "ruff>=0.3.0",
+    "build>=0.10.0",
+    "twine>=5.0.0",
+]
+
+[project.scripts]
+autowrec = "autowrec.__main__:main"
+autowrec-mcp = "autowrec.mcp_server:run_mcp_server"
+
+[tool.setuptools.dynamic]
+version = {attr = "autowrec.config.VERSION"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["autowrec*"]
+
+[tool.setuptools.package-data]
+"autowrec" = ["data/*.json", "recorder/js/*.js"]
+
+[tool.ruff]
+line-length = 121
+target-version = "py311"
+
+[tool.ruff.lint]
+# E: pycodestyle, F: Pyflakes, I: isort, B: flake8-bugbear, UP: pyupgrade
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["UP042"]
+
+[tool.ruff.format]
+quote-style = "double"
