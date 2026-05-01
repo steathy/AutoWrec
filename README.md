@@ -22,6 +22,14 @@ You browse a website         AutoWrec captures everything          AI explores v
 ## Installation
 
 ```bash
+pip install git+https://github.com/steathy/AutoWrec.git
+```
+
+For local development:
+
+```bash
+git clone https://github.com/steathy/AutoWrec.git
+cd AutoWrec
 pip install -e .
 ```
 
