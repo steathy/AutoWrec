@@ -41,33 +41,26 @@ AutoWrec runs as an MCP (Model Context Protocol) server over stdio. AI tools lik
 
 #### Setup with Claude Code
 
-**Option 1 — Local install** (after `pip install -e .`):
+**Recommended — pip install + direct invocation** (fastest startup):
 
-Add to your project's `.mcp.json`:
+```bash
+pip install git+https://github.com/steathy/AutoWrec.git
+```
+
+Add to your project's `.mcp.json` or global `~/.claude.json`:
 
 ```json
 {
   "mcpServers": {
     "autowrec": {
-      "command": "autowrec-mcp"
+      "command": "python",
+      "args": ["-m", "autowrec.mcp_server"]
     }
   }
 }
 ```
 
-Or to your global config at `~/.claude.json`:
-
-```json
-{
-  "mcpServers": {
-    "autowrec": {
-      "command": "autowrec-mcp"
-    }
-  }
-}
-```
-
-**Option 2 — Install from GitHub** (no local clone needed):
+**Alternative — uvx** (no pip install needed, but slower startup on Windows):
 
 ```json
 {

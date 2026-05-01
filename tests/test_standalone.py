@@ -90,7 +90,7 @@ def run_tests():
 
     from autowrec import config
 
-    check("VERSION is set", config.VERSION == "0.1.0")
+    check("VERSION is set", config.VERSION == "1.0.0")
     check("FPS default", config.FPS == 3)
     check("SEGMENT_PAD_SECONDS default", config.SEGMENT_PAD_SECONDS == 2)
     check("SANDBOX_TIMEOUT_SECONDS default", config.SANDBOX_TIMEOUT_SECONDS == 60)
@@ -104,7 +104,9 @@ def run_tests():
     section("3. MCP Server — Tool Registration")
     # ─────────────────────────────────────────────────────────────────────────
 
-    from autowrec.mcp_server import mcp
+    from autowrec.mcp_server import _build_server
+
+    mcp, _mcp_state, _safe_resolve = _build_server()
 
     async def test_tools():
         tools = await mcp.list_tools()
@@ -126,8 +128,6 @@ def run_tests():
     # ─────────────────────────────────────────────────────────────────────────
     section("4. Path Traversal Protection")
     # ─────────────────────────────────────────────────────────────────────────
-
-    from autowrec.mcp_server import _safe_resolve
 
     test_workspace = tempfile.mkdtemp(prefix="autowrec_test_")
     os.makedirs(os.path.join(test_workspace, "requests"), exist_ok=True)
@@ -155,8 +155,6 @@ def run_tests():
     # ─────────────────────────────────────────────────────────────────────────
     section("5. Workspace Tools (mock data)")
     # ─────────────────────────────────────────────────────────────────────────
-
-    import autowrec.mcp_server as mcp_mod
 
     fake_workspace = tempfile.mkdtemp(prefix="autowrec_ws_")
     fake_session = os.path.join(fake_workspace, "session_dump")
@@ -186,48 +184,61 @@ def run_tests():
     with open(os.path.join(tx_dir, "res_body.html"), "w") as f:
         f.write("<html><body>Hello World</body></html>")
 
-    mcp_mod._active_workspace = fake_session
+    _mcp_state["workspace"] = fake_session
 
-    try:
-        result = json.loads(mcp_mod.read_session_summary())
-        check("read_session_summary", "session" in result and "statistics" in result)
-    except Exception as e:
-        check("read_session_summary", False, str(e))
+    def _tool_text(tool_result):
+        """Extract text from a FastMCP ToolResult."""
+        return tool_result.content[0].text
 
-    try:
-        result = json.loads(mcp_mod.read_timeline(offset=0, limit=2))
-        check("read_timeline pagination", result["total"] == 3 and len(result["events"]) == 2)
-        check("read_timeline has_more", result["has_more"] is True)
-    except Exception as e:
-        check("read_timeline", False, str(e))
+    async def test_workspace_tools():
+        try:
+            result = json.loads(_tool_text(await mcp.call_tool("read_session_summary", {})))
+            check("read_session_summary", "session" in result and "statistics" in result)
+        except Exception as e:
+            check("read_session_summary", False, str(e))
 
-    try:
-        result = json.loads(mcp_mod.read_transaction("requests/000_GET_example.com", include_response_body=True))
-        check("read_transaction with body", "Hello World" in result.get("response_body", ""))
-    except Exception as e:
-        check("read_transaction", False, str(e))
+        try:
+            result = json.loads(_tool_text(await mcp.call_tool("read_timeline", {"offset": 0, "limit": 2})))
+            check("read_timeline pagination", result["total"] == 3 and len(result["events"]) == 2)
+            check("read_timeline has_more", result["has_more"] is True)
+        except Exception as e:
+            check("read_timeline", False, str(e))
 
-    try:
-        result = json.loads(mcp_mod.list_workspace_files())
-        names = {e["name"] for e in result["entries"]}
-        check("list_workspace_files", "SUMMARY.json" in names and "requests" in names)
-    except Exception as e:
-        check("list_workspace_files", False, str(e))
+        try:
+            result = json.loads(_tool_text(await mcp.call_tool("read_transaction", {
+                "request_folder": "requests/000_GET_example.com",
+                "include_response_body": True,
+            })))
+            check("read_transaction with body", "Hello World" in result.get("response_body", ""))
+        except Exception as e:
+            check("read_transaction", False, str(e))
 
-    try:
-        result = json.loads(mcp_mod.read_file("SUMMARY.json"))
-        check("read_file", result["encoding"] == "utf-8" and result["size"] > 0)
-    except Exception as e:
-        check("read_file", False, str(e))
+        try:
+            result = json.loads(_tool_text(await mcp.call_tool("list_workspace_files", {})))
+            names = {e["name"] for e in result["entries"]}
+            check("list_workspace_files", "SUMMARY.json" in names and "requests" in names)
+        except Exception as e:
+            check("list_workspace_files", False, str(e))
 
-    try:
-        mcp_mod.read_file("../../etc/passwd")
-        check("read_file blocks traversal", False, "should have raised")
-    except (ValueError, FileNotFoundError):
-        check("read_file blocks traversal", True)
+        try:
+            result = json.loads(_tool_text(await mcp.call_tool("read_file", {"path": "SUMMARY.json"})))
+            check("read_file", result["encoding"] == "utf-8" and result["size"] > 0)
+        except Exception as e:
+            check("read_file", False, str(e))
+
+        try:
+            await mcp.call_tool("read_file", {"path": "../../etc/passwd"})
+            check("read_file blocks traversal", False, "should have raised")
+        except (ValueError, FileNotFoundError):
+            check("read_file blocks traversal", True)
+        except Exception as e:
+            # FastMCP may wrap the error — check the message
+            check("read_file blocks traversal", "traversal" in str(e).lower() or "not found" in str(e).lower(), str(e))
+
+    asyncio.run(test_workspace_tools())
 
     shutil.rmtree(fake_workspace, ignore_errors=True)
-    mcp_mod._active_workspace = None
+    _mcp_state["workspace"] = None
 
     # ─────────────────────────────────────────────────────────────────────────
     section("6. IPython Sandbox")
