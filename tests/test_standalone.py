@@ -541,11 +541,23 @@ def run_tests():
     from autowrec.recorder.video_recorder import ActionVideoRecorder
     from autowrec import console as _console_mod
     from rich.console import Console as _RichConsole
+    from pathlib import Path as _Path
 
-    # Create a real temp file, then monkeypatch mkstemp to return it
+    # Create isolated temp dir for this test
     vf_dir = tempfile.mkdtemp(prefix="autowrec_vfail_")
     vf_fd, vf_path = tempfile.mkstemp(suffix=".mp4", prefix="autowrec_", dir=vf_dir)
     os.close(vf_fd)
+
+    # Isolate config output paths
+    _test_output = tempfile.mkdtemp(prefix="autowrec_testout_")
+    _saved_output = cfg.OUTPUT_DIR
+    _saved_ws = cfg.WORKSPACE_DIR
+    _saved_bl_dir = cfg.BLOCKLIST_DIR
+    _saved_bl_db = cfg.BLOCKLIST_DB
+    cfg.OUTPUT_DIR = _Path(_test_output)
+    cfg.WORKSPACE_DIR = _Path(_test_output) / "workspace"
+    cfg.BLOCKLIST_DIR = _Path(_test_output) / "blocklist"
+    cfg.BLOCKLIST_DB = _Path(_test_output) / "blocklist.db"
 
     # Redirect console to avoid encoding errors during test
     _saved_console = _console_mod.console
@@ -554,25 +566,38 @@ def run_tests():
     def fake_mkstemp(*args, **kwargs):
         return (99, vf_path)
 
-    with patch.object(_rec_mod.tempfile, "mkstemp", side_effect=fake_mkstemp), \
-         patch.object(_rec_mod.os, "close", return_value=None), \
-         patch.object(ActionVideoRecorder, "start", return_value=False), \
-         patch.object(_rec_mod, "_init_blocklist", return_value=None), \
-         patch.object(_rec_mod, "BrowserAgent") as mock_ba:
-        mock_ba_inst = MagicMock()
-        mock_ba_inst.stats = {"blocked_by_blocklist": 0}
-        async def fake_session(*a, **kw):
-            return {}
-        mock_ba_inst.run_session = fake_session
-        mock_ba.return_value = mock_ba_inst
-        try:
-            _rec_mod.run_recording(url="about:blank", enable_video=True)
-        except Exception:
-            pass
+    try:
+        with patch.object(_rec_mod.tempfile, "mkstemp", side_effect=fake_mkstemp), \
+             patch.object(_rec_mod.os, "close", return_value=None), \
+             patch.object(ActionVideoRecorder, "start", return_value=False), \
+             patch.object(_rec_mod, "_init_blocklist", return_value=None), \
+             patch.object(_rec_mod, "compile_workspace", return_value=True), \
+             patch.object(_rec_mod, "BrowserAgent") as mock_ba:
+            mock_ba_inst = MagicMock()
+            mock_ba_inst.stats = {"blocked_by_blocklist": 0}
+            async def fake_session(*a, **kw):
+                return {"metadata": {}, "requests": [], "actions": []}
+            mock_ba_inst.run_session = fake_session
+            mock_ba.return_value = mock_ba_inst
 
-    _console_mod.console = _saved_console
-    check("video startup fail cleans temp file", not os.path.exists(vf_path))
+            result = _rec_mod.run_recording(url="about:blank", enable_video=True)
+
+        check("video startup fail cleans temp file", not os.path.exists(vf_path))
+        # Verify no full_record.mp4 was promoted (video never started)
+        session_dump = os.path.join(_test_output, "workspace", "session_dump")
+        promoted = os.path.join(session_dump, "full_record.mp4")
+        check("no invalid video promoted to workspace", not os.path.exists(promoted))
+    except Exception as e:
+        check("video startup fail test ran", False, str(e))
+    finally:
+        _console_mod.console = _saved_console
+        cfg.OUTPUT_DIR = _saved_output
+        cfg.WORKSPACE_DIR = _saved_ws
+        cfg.BLOCKLIST_DIR = _saved_bl_dir
+        cfg.BLOCKLIST_DB = _saved_bl_db
+
     shutil.rmtree(vf_dir, ignore_errors=True)
+    shutil.rmtree(_test_output, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────────
     section("RESULTS")

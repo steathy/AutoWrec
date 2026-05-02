@@ -149,10 +149,12 @@ def run_recording(
             pass
 
         if session_data:
+            recorded_video = temp_video_path if video_start_unix else None
+
             try:
                 success = compile_workspace(
                     session_data=session_data,
-                    full_video_path=temp_video_path,
+                    full_video_path=recorded_video,
                     video_start_unix=video_start_unix,
                 )
             except Exception as exc:
@@ -160,11 +162,11 @@ def run_recording(
                 log_exception()
                 success = False
 
-            if success and temp_video_path and os.path.exists(temp_video_path):
+            if success and recorded_video and os.path.exists(recorded_video):
                 final_video_path = os.path.join(str(config.WORKSPACE_DIR), "session_dump", "full_record.mp4")
                 try:
                     os.makedirs(os.path.dirname(final_video_path), exist_ok=True)
-                    shutil.move(temp_video_path, final_video_path)
+                    shutil.move(recorded_video, final_video_path)
                     info(f"Full recording saved to {final_video_path}")
                 except OSError as exc:
                     error(f"Failed to move recording to workspace: {exc}")
