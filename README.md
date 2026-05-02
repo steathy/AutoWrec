@@ -1,4 +1,4 @@
-# AutoWrec v1.0
+# AutoWrec v1.1
 
 A browser session recorder that captures network traffic, user actions, and screen video — then exposes everything as tools for AI coding assistants.
 

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # ── Persistent user-level directory (~/.autowrec/) ──────────────────────────
 # Stores binaries, logs, history, and user preferences across sessions.
