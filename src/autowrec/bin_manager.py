@@ -1,5 +1,5 @@
 """
-Automatic binary downloader for the IPython sandbox PATH jail.
+Automatic binary downloader for the IPython execution environment PATH jail.
 
 Ensures rg, jq, sd (all platforms) and busybox (Windows only) are available.
 Checks ~/.autowrec/bin first, then system PATH, then downloads with a Rich

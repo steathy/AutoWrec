@@ -169,7 +169,7 @@ speed = 1.0
 python tests/test_standalone.py
 ```
 
-Runs 70 tests covering imports, config, MCP tools, path traversal protection, workspace operations, IPython execution, console redirect safety, redaction, input validation, and binary body encoding.
+Runs a standalone test suite covering imports, config validation, MCP tools, path traversal protection, workspace operations, IPython execution, console redirect safety, redaction, input validation, and binary body encoding.
 
 ## Architecture
 

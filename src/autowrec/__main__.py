@@ -73,7 +73,7 @@ def _apply_config_overrides(args):
         config.BLOCKLIST_DIR = config.OUTPUT_DIR / "blocklist"
         config.BLOCKLIST_DB = config.OUTPUT_DIR / "blocklist.db"
     if getattr(args, "sandbox_timeout", None) is not None:
-        config.SANDBOX_TIMEOUT_SECONDS = args.sandbox_timeout
+        config.SANDBOX_TIMEOUT_SECONDS = max(1, args.sandbox_timeout)
     if getattr(args, "no_banner", False):
         config.BANNER_ENABLED = False
     if getattr(args, "no_blocklist", False):

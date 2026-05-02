@@ -127,6 +127,8 @@ class ActionVideoRecorder:
             if time.time() > deadline:
                 warn("Video recorder failed to start within 10s — disabling video.")
                 self.is_recording = False
+                if self.thread:
+                    self.thread.join(timeout=2)
                 return False
             time.sleep(0.01)
 

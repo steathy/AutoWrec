@@ -131,13 +131,6 @@ class BrowserAgent:
         if event.wall_time:
             self.ts_converter.calibrate(event.timestamp, event.wall_time)
 
-        if event.type_ in (
-            cdp.network.ResourceType.DOCUMENT,
-            cdp.network.ResourceType.XHR,
-            cdp.network.ResourceType.FETCH,
-        ):
-            self.stats["actionable_requests"] += 1
-
         if event.request_id in self.active_map:
             old_req = self.active_map[event.request_id]
             if event.redirect_response:
@@ -190,6 +183,12 @@ class BrowserAgent:
         self.captured_requests.append(request_obj)
         self.active_map[event.request_id] = request_obj
         self.stats["total_requests"] += 1
+        if event.type_ in (
+            cdp.network.ResourceType.DOCUMENT,
+            cdp.network.ResourceType.XHR,
+            cdp.network.ResourceType.FETCH,
+        ):
+            self.stats["actionable_requests"] += 1
 
     async def data_received_handler(self, event: cdp.network.DataReceived):
         """Accumulate streamed response chunks for requests we're tracking."""

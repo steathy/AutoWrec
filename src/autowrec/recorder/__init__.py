@@ -87,7 +87,10 @@ def run_recording(
         warn(f"Could not install SIGINT handler (running in a thread?): {exc}")
         prev_handler = signal.SIG_DFL
 
-    temp_video_path = tempfile.mktemp(suffix=".mp4", prefix="autowrec_") if enable_video else None
+    temp_video_path = None
+    if enable_video:
+        fd, temp_video_path = tempfile.mkstemp(suffix=".mp4", prefix="autowrec_")
+        os.close(fd)
 
     blocklist = _init_blocklist()
 
@@ -178,6 +181,12 @@ def run_recording(
             signal.signal(signal.SIGINT, prev_handler)
         except (OSError, ValueError):
             pass
+
+        if temp_video_path and os.path.exists(temp_video_path):
+            try:
+                os.unlink(temp_video_path)
+            except OSError:
+                pass
 
         _browser_agent = None
         _video_recorder = None

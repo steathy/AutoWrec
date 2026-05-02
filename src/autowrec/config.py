@@ -90,7 +90,7 @@ blocklist_enabled       = true
 redact_sensitive        = false
 
 [agent]
-# How long (seconds) a single IPython cell is allowed to run in the sandbox.
+# How long (seconds) a single IPython cell is allowed to run.
 sandbox_timeout = 60
 
 [banner]
@@ -147,6 +147,13 @@ def _load_config_toml():
         print(f"[WARN] Failed to parse {CONFIG_FILE}: {exc}", file=sys.stderr)
         return
 
+    def _safe_table(data, key):
+        val = data.get(key, {})
+        if isinstance(val, dict):
+            return val
+        print(f"[WARN] Config section [{key}] should be a table, got {type(val).__name__}. Ignoring.", file=sys.stderr)
+        return {}
+
     def _safe_int(val, default, name=""):
         try:
             return int(val)
@@ -162,12 +169,12 @@ def _load_config_toml():
             return default
 
     # [agent] (legacy — only sandbox_timeout is still used)
-    agent = data.get("agent", {})
+    agent = _safe_table(data, "agent")
     if "sandbox_timeout" in agent:
         SANDBOX_TIMEOUT_SECONDS = _safe_int(agent["sandbox_timeout"], SANDBOX_TIMEOUT_SECONDS, "agent.sandbox_timeout")
 
     # [recording]
-    rec = data.get("recording", {})
+    rec = _safe_table(data, "recording")
     if "fps" in rec:
         FPS = _safe_int(rec["fps"], FPS, "recording.fps")
     if "segment_pad" in rec:
@@ -180,25 +187,29 @@ def _load_config_toml():
         REDACT_SENSITIVE = bool(rec["redact_sensitive"])
 
     # [banner]
-    banner = data.get("banner", {})
+    banner = _safe_table(data, "banner")
     if "enabled" in banner:
         BANNER_ENABLED = bool(banner["enabled"])
     if "speed" in banner:
         BANNER_SPEED = _safe_float(banner["speed"], BANNER_SPEED, "banner.speed")
 
     # [output]
-    output = data.get("output", {})
+    output = _safe_table(data, "output")
     if "dir" in output:
-        try:
-            OUTPUT_DIR = Path(str(output["dir"])).resolve()
-            WORKSPACE_DIR = OUTPUT_DIR / "workspace"
-            BLOCKLIST_DIR = OUTPUT_DIR / "blocklist"
-            BLOCKLIST_DB = OUTPUT_DIR / "blocklist.db"
-        except Exception:
-            print(f"[WARN] Invalid output.dir value: {output['dir']!r}, using default", file=sys.stderr)
+        dir_val = output["dir"]
+        if isinstance(dir_val, str):
+            try:
+                OUTPUT_DIR = Path(dir_val).resolve()
+                WORKSPACE_DIR = OUTPUT_DIR / "workspace"
+                BLOCKLIST_DIR = OUTPUT_DIR / "blocklist"
+                BLOCKLIST_DB = OUTPUT_DIR / "blocklist.db"
+            except Exception:
+                print(f"[WARN] Invalid output.dir path: {dir_val!r}, using default", file=sys.stderr)
+        else:
+            print(f"[WARN] output.dir must be a string, got {type(dir_val).__name__}: {dir_val!r}. Using default.", file=sys.stderr)
 
     # [mcp]
-    mcp_cfg = data.get("mcp", {})
+    mcp_cfg = _safe_table(data, "mcp")
     if "video_enabled" in mcp_cfg:
         MCP_VIDEO_ENABLED = bool(mcp_cfg["video_enabled"])
 
