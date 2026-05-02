@@ -248,6 +248,7 @@ class ActionVideoRecorder:
             self.thread.join(timeout=5)
             if self.thread.is_alive():
                 warn("Video recording thread did not exit within 5s.")
+                return None
 
         return self.video_start_unix
 
