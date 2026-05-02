@@ -508,18 +508,30 @@ class BrowserAgent:
         self.recording_active = False
 
     async def _wait_for_pending_requests(self, timeout: float = 10.0, idle_time: float = 1.0) -> None:
-        """Wait until all tracked requests in active_map have resolved
-        (LoadingFinished/LoadingFailed), or until we've been network-idle
-        for `idle_time` seconds, whichever comes first.
-        Gives up entirely after `timeout` seconds."""
+        """Drain pending requests before building the session report.
+
+        Exit paths:
+        - User cancelled (recording_active=False): exits immediately, no wait.
+        - Network idle for `idle_time` seconds: assumes stragglers won't resolve.
+        - All requests resolved: normal completion.
+        - Hard timeout after `timeout` seconds: gives up.
+
+        On the common paths (Ctrl+C, browser close), recording_active is already
+        False so this function returns near-instantly. The drain only runs when
+        the session ended via an exception with the browser still connected.
+        """
         if not self.active_map:
+            return
+
+        if not self.recording_active:
             return
 
         pending = len(self.active_map)
         info(f"Waiting for {pending} pending request(s) to complete (timeout={timeout}s, idle={idle_time}s)...")
 
         loop = asyncio.get_event_loop()
-        deadline = loop.time() + timeout
+        start_time = loop.time()
+        deadline = start_time + timeout
         last_change = loop.time()
         prev_count = pending
 
@@ -528,20 +540,19 @@ class BrowserAgent:
                 break
             current_count = len(self.active_map)
             if current_count != prev_count:
-                # Map changed — something resolved, reset the idle timer
                 last_change = loop.time()
                 prev_count = current_count
 
-            # If the map hasn't changed for `idle_time`, assume stragglers won't resolve
             if loop.time() - last_change >= idle_time:
                 info(f"Network idle for {idle_time}s with {current_count} request(s) still pending — moving on.")
-                break
+                return
 
             await asyncio.sleep(0.1)
 
         remaining = len(self.active_map)
+        elapsed = loop.time() - start_time
         if remaining:
-            warn(f"Drain finished with {remaining} request(s) still pending after {timeout}s.")
+            warn(f"Drain finished with {remaining} request(s) still pending after {elapsed:.1f}s.")
         else:
             info("All pending requests resolved.")
 
