@@ -130,15 +130,26 @@ SD_URLS = {
 }
 
 
-# ── Expected SHA-256 hashes for final extracted binaries ────────────────────
-# Keyed by (tool_name, os, arch). Used to verify after download/extraction.
+# ── Expected SHA-256 hashes for final extracted/downloaded binaries ─────────
+# Keyed by (tool_name, os, arch) for rg/jq/sd.
+# Busybox is keyed by (source_filename) since multiple variants exist per arch.
 # Missing entries produce a warning but don't block — graceful degradation.
 
 _EXPECTED_HASHES = {
-    ("busybox", "windows", "amd64"): "d5d624ddb5f3cc235179d2912be36e5218dd59ecc851bbc040d3a1d0707ec45a",
+    # rg, jq, sd — keyed by (tool, os, arch)
     ("jq", "windows", "amd64"): "7451fbbf37feffb9bf262bd97c54f0da558c63f0748e64152dd87b0a07b6d6ab",
     ("rg", "windows", "amd64"): "f162b54de2adfc72d78adb1dbada2dedda111ae0a5e2f6e9500f4f909664c5d2",
     ("sd", "windows", "amd64"): "8a6d3c25659bab304bd5497cbcf5ac93698b4fda4421b5eac8985e6e51f6cbfa",
+}
+
+# Busybox hashes keyed by source filename (variant-specific).
+# frippery.org doesn't version URLs, so these correspond to the build available
+# at the time of pinning. Update if upstream publishes new builds.
+_BUSYBOX_HASHES = {
+    "busybox64u.exe": "d5d624ddb5f3cc235179d2912be36e5218dd59ecc851bbc040d3a1d0707ec45a",
+    # "busybox64.exe": None,   # TODO: compute on older Windows without Unicode support
+    # "busybox64a.exe": None,  # TODO: compute on ARM64 Windows
+    # "busybox.exe": None,     # TODO: compute on 32-bit Windows
 }
 
 
@@ -152,6 +163,22 @@ def _verify_binary(path: Path, tool_name: str, os_name: str, arch: str) -> bool:
     actual = hashlib.sha256(path.read_bytes()).hexdigest()
     if actual != expected:
         error(f"SHA-256 mismatch for {tool_name}! Expected {expected[:16]}..., got {actual[:16]}...")
+        error(f"Removing untrusted binary: {path}")
+        path.unlink(missing_ok=True)
+        return False
+    return True
+
+
+def _verify_busybox(path: Path, source_filename: str) -> bool:
+    """Verify SHA-256 hash of a downloaded busybox variant."""
+    expected = _BUSYBOX_HASHES.get(source_filename)
+    if expected is None:
+        warn(f"No SHA-256 hash on record for busybox variant '{source_filename}' — skipping verification.")
+        return True
+
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != expected:
+        error(f"SHA-256 mismatch for busybox ({source_filename})! Expected {expected[:16]}..., got {actual[:16]}...")
         error(f"Removing untrusted binary: {path}")
         path.unlink(missing_ok=True)
         return False
@@ -237,8 +264,9 @@ def _ensure_busybox(bin_dir: Path, os_name: str, arch: str):
     if shutil.which("busybox"):
         return
     url, _ = _pick_busybox_url(arch)
+    source_filename = url.rsplit("/", 1)[-1]
     _download_file(url, dest, label="busybox")
-    if not _verify_binary(dest, "busybox", os_name, arch):
+    if not _verify_busybox(dest, source_filename):
         return
 
 
