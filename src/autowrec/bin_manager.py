@@ -6,6 +6,7 @@ Checks ~/.autowrec/bin first, then system PATH, then downloads with a Rich
 progress display.
 """
 
+import hashlib
 import os
 import platform
 import shutil
@@ -129,6 +130,34 @@ SD_URLS = {
 }
 
 
+# ── Expected SHA-256 hashes for final extracted binaries ────────────────────
+# Keyed by (tool_name, os, arch). Used to verify after download/extraction.
+# Missing entries produce a warning but don't block — graceful degradation.
+
+_EXPECTED_HASHES = {
+    ("busybox", "windows", "amd64"): "d5d624ddb5f3cc235179d2912be36e5218dd59ecc851bbc040d3a1d0707ec45a",
+    ("jq", "windows", "amd64"): "7451fbbf37feffb9bf262bd97c54f0da558c63f0748e64152dd87b0a07b6d6ab",
+    ("rg", "windows", "amd64"): "f162b54de2adfc72d78adb1dbada2dedda111ae0a5e2f6e9500f4f909664c5d2",
+    ("sd", "windows", "amd64"): "8a6d3c25659bab304bd5497cbcf5ac93698b4fda4421b5eac8985e6e51f6cbfa",
+}
+
+
+def _verify_binary(path: Path, tool_name: str, os_name: str, arch: str) -> bool:
+    """Verify SHA-256 hash of a downloaded binary. Returns True if valid or no hash available."""
+    expected = _EXPECTED_HASHES.get((tool_name, os_name, arch))
+    if expected is None:
+        warn(f"No SHA-256 hash on record for {tool_name} ({os_name}/{arch}) — skipping verification.")
+        return True
+
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != expected:
+        error(f"SHA-256 mismatch for {tool_name}! Expected {expected[:16]}..., got {actual[:16]}...")
+        error(f"Removing untrusted binary: {path}")
+        path.unlink(missing_ok=True)
+        return False
+    return True
+
+
 # ── Download helpers ─────────────────────────────────────────────────────────
 
 
@@ -209,6 +238,8 @@ def _ensure_busybox(bin_dir: Path, os_name: str, arch: str):
         return
     url, _ = _pick_busybox_url(arch)
     _download_file(url, dest, label="busybox")
+    if not _verify_binary(dest, "busybox", os_name, arch):
+        return
 
 
 def _ensure_rg(bin_dir: Path, os_name: str, arch: str):
@@ -225,6 +256,8 @@ def _ensure_rg(bin_dir: Path, os_name: str, arch: str):
     _download_file(url, tmp, label="ripgrep")
     _extract_binary_from_archive(tmp, _exe("rg"), dest)
     tmp.unlink(missing_ok=True)
+    if dest.exists() and not _verify_binary(dest, "rg", os_name, arch):
+        return
 
 
 def _ensure_jq(bin_dir: Path, os_name: str, arch: str):
@@ -238,6 +271,8 @@ def _ensure_jq(bin_dir: Path, os_name: str, arch: str):
         warn(f"No jq download available for {os_name}/{arch}")
         return
     _download_file(url, dest, label="jq")
+    if not _verify_binary(dest, "jq", os_name, arch):
+        return
     _make_executable(dest)
 
 
@@ -255,6 +290,8 @@ def _ensure_sd(bin_dir: Path, os_name: str, arch: str):
     _download_file(url, tmp, label="sd")
     _extract_binary_from_archive(tmp, _exe("sd"), dest)
     tmp.unlink(missing_ok=True)
+    if dest.exists() and not _verify_binary(dest, "sd", os_name, arch):
+        return
 
 
 # ── Public API ───────────────────────────────────────────────────────────────

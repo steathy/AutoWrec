@@ -186,6 +186,7 @@ def merge_and_annotate_actions(
     actions: list[dict],
     full_video_path: str | None,
     video_start_unix: float | None,
+    clips_dir: str | None = None,
 ) -> list[dict]:
     """Merge action clusters and annotate with video clip paths.
 
@@ -220,7 +221,8 @@ def merge_and_annotate_actions(
     if not has_video:
         return actions
 
-    _, _, clips_dir, _ = _get_paths()
+    if clips_dir is None:
+        _, _, clips_dir, _ = _get_paths()
     info(f"Splitting {len(merged_clips)} video action segments...")
     for idx, cluster in enumerate(merged_clips):
         first_action_time_relative = cluster[0]["timestamp_unix"] - video_start_unix
@@ -242,7 +244,7 @@ def merge_and_annotate_actions(
     return actions
 
 
-def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
+def process_network_requests(requests: list[dict], output_dir: str | None = None, requests_dir: str | None = None) -> tuple[list[dict], dict]:
     """Process captured requests into transaction files and timeline events.
 
     NOTE: Mutates the input list in place — pops post_data and response body
@@ -250,7 +252,10 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
     """
     timeline_requests = []
     detection_stats = {"request_detected": 0, "response_detected": 0, "mismatches": 0}
-    _, _, _, requests_dir = _get_paths()
+    if requests_dir is None:
+        _, _, _, requests_dir = _get_paths()
+    if output_dir is None:
+        _, output_dir, _, _ = _get_paths()
 
     for idx, item in enumerate(requests):
         try:
@@ -353,7 +358,6 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
         except Exception as e:
             error(f"Failed to process request at index {idx}: {e}")
             log_exception()
-            _, output_dir, _, _ = _get_paths()
             error_filename = os.path.join(output_dir, f"CRASH_REPORT_{idx:03d}.txt")
             try:
                 with open(error_filename, "w", encoding="utf-8") as debug_f:
@@ -376,13 +380,20 @@ def compile_workspace(
     info("Extracting data...")
 
     _, OUTPUT_DIR, CLIPS_DIR, REQUESTS_DIR = _get_paths()
+    STAGING_DIR = OUTPUT_DIR + "_new"
+    PREV_DIR = OUTPUT_DIR + "_prev"
 
     try:
-        if os.path.exists(OUTPUT_DIR):
-            shutil.rmtree(OUTPUT_DIR)
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        os.makedirs(CLIPS_DIR, exist_ok=True)
-        os.makedirs(REQUESTS_DIR, exist_ok=True)
+        if os.path.exists(STAGING_DIR):
+            shutil.rmtree(STAGING_DIR)
+        os.makedirs(STAGING_DIR, exist_ok=True)
+        os.makedirs(os.path.join(STAGING_DIR, "clips"), exist_ok=True)
+        os.makedirs(os.path.join(STAGING_DIR, "requests"), exist_ok=True)
+
+        # Override paths to write into staging dir
+        OUTPUT_DIR = STAGING_DIR
+        CLIPS_DIR = os.path.join(STAGING_DIR, "clips")
+        REQUESTS_DIR = os.path.join(STAGING_DIR, "requests")
 
         metadata = session_data.get("metadata", {})
         requests = session_data.get("requests", [])
@@ -390,7 +401,7 @@ def compile_workspace(
         timeline_events = []
 
         if actions:
-            actions = merge_and_annotate_actions(actions, full_video_path, video_start_unix)
+            actions = merge_and_annotate_actions(actions, full_video_path, video_start_unix, clips_dir=CLIPS_DIR)
             for action in actions:
                 timeline_events.append(
                     {
@@ -426,7 +437,7 @@ def compile_workspace(
         detection_stats = {}
         if requests:
             info(f"Extracting {len(requests)} network requests and building transactions...")
-            network_events, detection_stats = process_network_requests(requests)
+            network_events, detection_stats = process_network_requests(requests, output_dir=OUTPUT_DIR, requests_dir=REQUESTS_DIR)
             timeline_events.extend(network_events)
 
         timeline_events.sort(key=lambda x: x["timestamp"])
@@ -485,7 +496,17 @@ def compile_workspace(
         with open(os.path.join(OUTPUT_DIR, "session_metadata.json"), "w", encoding="utf-8") as f:
             json.dump(make_serializable(metadata), f, indent=2)
 
-        success(f"Workspace compiled successfully at {OUTPUT_DIR}")
+        # Atomic swap: staging → final (old session preserved until new one is ready)
+        _, final_output, _, _ = _get_paths()
+        if os.path.exists(PREV_DIR):
+            shutil.rmtree(PREV_DIR)
+        if os.path.exists(final_output):
+            os.rename(final_output, PREV_DIR)
+        os.rename(STAGING_DIR, final_output)
+        if os.path.exists(PREV_DIR):
+            shutil.rmtree(PREV_DIR, ignore_errors=True)
+
+        success(f"Workspace compiled successfully at {final_output}")
         if MAGIKA_AVAILABLE:
             detail(f"Payloads detected: {detection_stats.get('request_detected', 0)}")
             detail(f"Bodies detected: {detection_stats.get('response_detected', 0)}")
