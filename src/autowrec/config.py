@@ -138,39 +138,42 @@ def _load_config_toml():
             pass
         return
 
+    import sys
+
     try:
         with open(CONFIG_FILE, "rb") as f:
             data = tomllib.load(f)
     except Exception as exc:
-        import sys
         print(f"[WARN] Failed to parse {CONFIG_FILE}: {exc}", file=sys.stderr)
         return
 
-    def _safe_int(val, default):
+    def _safe_int(val, default, name=""):
         try:
             return int(val)
         except (ValueError, TypeError):
+            print(f"[WARN] Invalid config value for {name}: {val!r}, using default {default}", file=sys.stderr)
             return default
 
-    def _safe_float(val, default):
+    def _safe_float(val, default, name=""):
         try:
             return float(val)
         except (ValueError, TypeError):
+            print(f"[WARN] Invalid config value for {name}: {val!r}, using default {default}", file=sys.stderr)
             return default
 
     # [agent] (legacy — only sandbox_timeout is still used)
     agent = data.get("agent", {})
     if "sandbox_timeout" in agent:
-        SANDBOX_TIMEOUT_SECONDS = _safe_int(agent["sandbox_timeout"], SANDBOX_TIMEOUT_SECONDS)
+        SANDBOX_TIMEOUT_SECONDS = _safe_int(agent["sandbox_timeout"], SANDBOX_TIMEOUT_SECONDS, "agent.sandbox_timeout")
 
     # [recording]
     rec = data.get("recording", {})
     if "fps" in rec:
-        FPS = _safe_int(rec["fps"], FPS)
+        FPS = _safe_int(rec["fps"], FPS, "recording.fps")
     if "segment_pad" in rec:
-        SEGMENT_PAD_SECONDS = _safe_float(rec["segment_pad"], SEGMENT_PAD_SECONDS)
+        SEGMENT_PAD_SECONDS = _safe_float(rec["segment_pad"], SEGMENT_PAD_SECONDS, "recording.segment_pad")
     if "merge_gap_threshold" in rec:
-        MERGE_GAP_THRESHOLD_SECONDS = _safe_float(rec["merge_gap_threshold"], MERGE_GAP_THRESHOLD_SECONDS)
+        MERGE_GAP_THRESHOLD_SECONDS = _safe_float(rec["merge_gap_threshold"], MERGE_GAP_THRESHOLD_SECONDS, "recording.merge_gap_threshold")
     if "blocklist_enabled" in rec:
         BLOCKLIST_ENABLED = bool(rec["blocklist_enabled"])
     if "redact_sensitive" in rec:
@@ -181,15 +184,18 @@ def _load_config_toml():
     if "enabled" in banner:
         BANNER_ENABLED = bool(banner["enabled"])
     if "speed" in banner:
-        BANNER_SPEED = _safe_float(banner["speed"], BANNER_SPEED)
+        BANNER_SPEED = _safe_float(banner["speed"], BANNER_SPEED, "banner.speed")
 
     # [output]
     output = data.get("output", {})
     if "dir" in output:
-        OUTPUT_DIR = Path(output["dir"]).resolve()
-        WORKSPACE_DIR = OUTPUT_DIR / "workspace"
-        BLOCKLIST_DIR = OUTPUT_DIR / "blocklist"
-        BLOCKLIST_DB = OUTPUT_DIR / "blocklist.db"
+        try:
+            OUTPUT_DIR = Path(str(output["dir"])).resolve()
+            WORKSPACE_DIR = OUTPUT_DIR / "workspace"
+            BLOCKLIST_DIR = OUTPUT_DIR / "blocklist"
+            BLOCKLIST_DB = OUTPUT_DIR / "blocklist.db"
+        except Exception:
+            print(f"[WARN] Invalid output.dir value: {output['dir']!r}, using default", file=sys.stderr)
 
     # [mcp]
     mcp_cfg = data.get("mcp", {})

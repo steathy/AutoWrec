@@ -225,6 +225,7 @@ class ActionVideoRecorder:
             error(f"Video recording thread failed: {e}")
             log_exception()
         finally:
+            self.is_recording = False
             if writer is not None:
                 try:
                     writer.close()
@@ -242,7 +243,9 @@ class ActionVideoRecorder:
         self.is_recording = False
 
         if self.thread:
-            self.thread.join()
+            self.thread.join(timeout=5)
+            if self.thread.is_alive():
+                warn("Video recording thread did not exit within 5s.")
 
         return self.video_start_unix
 

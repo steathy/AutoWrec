@@ -78,8 +78,7 @@ def run_recording(
     """
     global _browser_agent, _video_recorder
 
-    if not config.WORKSPACE_DIR.exists():
-        config.ensure_output_dirs()
+    config.ensure_output_dirs()
 
     try:
         prev_handler = signal.getsignal(signal.SIGINT)
@@ -88,7 +87,7 @@ def run_recording(
         warn(f"Could not install SIGINT handler (running in a thread?): {exc}")
         prev_handler = signal.SIG_DFL
 
-    temp_video_path = os.path.join(tempfile.gettempdir(), "autowrec_full_record.mp4") if enable_video else None
+    temp_video_path = tempfile.mktemp(suffix=".mp4", prefix="autowrec_") if enable_video else None
 
     blocklist = _init_blocklist()
 
@@ -134,7 +133,7 @@ def run_recording(
                 log_exception()
 
         try:
-            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGINT, prev_handler)
         except (OSError, ValueError):
             pass
 

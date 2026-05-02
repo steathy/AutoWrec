@@ -280,6 +280,13 @@ def run_tests():
     except Exception as e:
         check("sandbox %reset", False, str(e))
 
+    try:
+        sandbox.execute("y = 99")
+        result = sandbox.execute("%restore")
+        check("sandbox %restore no deadlock", "RESTORED" in result or "No history" in result)
+    except Exception as e:
+        check("sandbox %restore no deadlock", False, str(e))
+
     sandbox.close()
     shutil.rmtree(sandbox_dir, ignore_errors=True)
 
@@ -328,13 +335,35 @@ def run_tests():
 
     from autowrec import config as cfg
 
-    # Simulate bad config values — should not crash, should keep defaults
-    original_fps = cfg.FPS
+    # Test with real bad config file
+    bad_config_dir = tempfile.mkdtemp(prefix="autowrec_badcfg_")
+    bad_config_file = os.path.join(bad_config_dir, "config.toml")
+    with open(bad_config_file, "w") as f:
+        f.write('[recording]\nfps = "fast"\nsegment_pad = "broken"\n\n[banner]\nspeed = "slow"\n')
+
+    saved_config_file = cfg.CONFIG_FILE
+    saved_fps = cfg.FPS
+    saved_pad = cfg.SEGMENT_PAD_SECONDS
+    saved_speed = cfg.BANNER_SPEED
     try:
-        # Calling int("fast") would crash without safe casts
-        check("config safe cast (int)", cfg._load_config_toml is not None)
+        from pathlib import Path
+        cfg.CONFIG_FILE = Path(bad_config_file)
+        cfg.FPS = 3
+        cfg.SEGMENT_PAD_SECONDS = 2.0
+        cfg.BANNER_SPEED = 1.0
+        cfg._load_config_toml()
+        check("bad config survives import", True)
+        check("bad fps keeps default", cfg.FPS == 3, f"got {cfg.FPS}")
+        check("bad segment_pad keeps default", cfg.SEGMENT_PAD_SECONDS == 2.0, f"got {cfg.SEGMENT_PAD_SECONDS}")
+        check("bad speed keeps default", cfg.BANNER_SPEED == 1.0, f"got {cfg.BANNER_SPEED}")
     except Exception as e:
-        check("config safe cast (int)", False, str(e))
+        check("bad config survives import", False, str(e))
+    finally:
+        cfg.CONFIG_FILE = saved_config_file
+        cfg.FPS = saved_fps
+        cfg.SEGMENT_PAD_SECONDS = saved_pad
+        cfg.BANNER_SPEED = saved_speed
+    shutil.rmtree(bad_config_dir, ignore_errors=True)
 
     check("FPS range validation", cfg.FPS >= 1, f"got {cfg.FPS}")
     check("SEGMENT_PAD >= 0", cfg.SEGMENT_PAD_SECONDS >= 0)

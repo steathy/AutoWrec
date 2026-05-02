@@ -30,7 +30,7 @@ class AgentSandbox:
         self._ready = threading.Event()
         self._executing = threading.Event()
         self._cancel_flag = threading.Event()
-        self._execute_lock = threading.Lock()
+        self._execute_lock = threading.RLock()
         self._cancel_result: str | None = None
 
         threading.Thread(target=self._background_start, daemon=True).start()

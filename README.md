@@ -178,7 +178,7 @@ src/autowrec/
 ├── mcp_server.py          # FastMCP server (8 tools over stdio)
 ├── config.py              # Global configuration + TOML loader
 ├── console.py             # Rich terminal output
-├── bin_manager.py         # Downloads rg, jq, sd for sandbox
+├── bin_manager.py         # Downloads rg, jq, sd for execution environment
 ├── recorder/
 │   ├── __init__.py        # Recording orchestration
 │   ├── browser_agent.py   # Chrome CDP instrumentation (zendriver)
@@ -186,13 +186,13 @@ src/autowrec/
 │   ├── data_compressor.py # Workspace compilation
 │   ├── blocklist_db.py    # Ad/tracker domain filter (SQLite)
 │   └── js/telemetry.js    # Injected browser event tracking
-└── ipython_sandbox/       # Isolated Python execution environment
+└── ipython_sandbox/       # Persistent Python execution environment
     ├── sandbox.py         # Process manager
     ├── worker.py          # IPython kernel (subprocess)
     └── utils.py           # Output formatting + process control
 
 tests/
-├── test_standalone.py     # 54 unit/integration tests
+├── test_standalone.py     # Unit/integration tests
 └── demo_record.py         # Interactive recording demo
 ```
 

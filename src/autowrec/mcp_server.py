@@ -366,7 +366,7 @@ def _build_server():
         sandbox = _get_sandbox()
         kwargs = {}
         if timeout is not None:
-            kwargs["custom_timeout"] = timeout
+            kwargs["custom_timeout"] = max(1, timeout)
         return sandbox.execute(code, **kwargs)
 
     return mcp, _state, _safe_resolve

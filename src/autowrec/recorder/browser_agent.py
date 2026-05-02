@@ -64,6 +64,7 @@ class BrowserAgent:
         self._request_tab: dict = {}  # request_id -> tab session for correct CDP calls
         self.stats = {
             "total_requests": 0,
+            "actionable_requests": 0,
             "completed": 0,
             "failed": 0,
             "incomplete": 0,
@@ -135,7 +136,7 @@ class BrowserAgent:
             cdp.network.ResourceType.XHR,
             cdp.network.ResourceType.FETCH,
         ):
-            self.stats["total_requests"] += 1
+            self.stats["actionable_requests"] += 1
 
         if event.request_id in self.active_map:
             old_req = self.active_map[event.request_id]
@@ -188,6 +189,7 @@ class BrowserAgent:
 
         self.captured_requests.append(request_obj)
         self.active_map[event.request_id] = request_obj
+        self.stats["total_requests"] += 1
 
     async def data_received_handler(self, event: cdp.network.DataReceived):
         """Accumulate streamed response chunks for requests we're tracking."""
@@ -414,7 +416,8 @@ class BrowserAgent:
                 def _make_request_handler(ts):
                     async def handler(event):
                         await self.request_handler(event)
-                        self._request_tab[event.request_id] = ts
+                        if event.request_id in self.active_map:
+                            self._request_tab[event.request_id] = ts
                     return handler
 
                 req_handler = _make_request_handler(tab_session)
@@ -588,6 +591,7 @@ class BrowserAgent:
                 "recording_ended": recording_end.isoformat(timespec="milliseconds"),
                 "duration_seconds": round(duration, 2),
                 "total_requests": self.stats["total_requests"],
+                "actionable_requests": self.stats["actionable_requests"],
                 "completed_requests": self.stats["completed"],
                 "failed_requests": self.stats["failed"],
                 "redirected_requests": self.stats["redirected"],
