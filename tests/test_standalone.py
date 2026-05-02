@@ -478,12 +478,25 @@ def run_tests():
         except Exception as e:
             check("read_file negative limit clamped", False, str(e))
 
-        # execute_code with timeout=0 should clamp to 1 and not crash
+        # execute_code with timeout=0 should clamp to 1 (use fake sandbox for isolation)
+        class _FakeSandbox:
+            def __init__(self):
+                self.last_kwargs = None
+            def execute(self, code, **kwargs):
+                self.last_kwargs = kwargs
+                return "[Cell_1] Status: Success\n2"
+
+        fake_sb = _FakeSandbox()
+        old_sb = _mcp_state.get("sandbox")
+        _mcp_state["sandbox"] = fake_sb
         try:
             result = _tool_text(await mcp.call_tool("execute_code", {"code": "print(1+1)", "timeout": 0}))
             check("execute_code timeout=0 clamped", "2" in result)
+            check("execute_code passes custom_timeout=1", fake_sb.last_kwargs == {"custom_timeout": 1})
         except Exception as e:
             check("execute_code timeout=0 clamped", False, str(e))
+        finally:
+            _mcp_state["sandbox"] = old_sb
 
     asyncio.run(test_validation())
     shutil.rmtree(val_workspace, ignore_errors=True)
@@ -518,6 +531,48 @@ def run_tests():
     asyncio.run(test_binary_body())
     shutil.rmtree(bin_workspace, ignore_errors=True)
     _mcp_state["workspace"] = None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    section("13. Video Startup Failure Cleanup")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    from unittest.mock import patch, MagicMock
+    import autowrec.recorder as _rec_mod
+    from autowrec.recorder.video_recorder import ActionVideoRecorder
+    from autowrec import console as _console_mod
+    from rich.console import Console as _RichConsole
+
+    # Create a real temp file, then monkeypatch mkstemp to return it
+    vf_dir = tempfile.mkdtemp(prefix="autowrec_vfail_")
+    vf_fd, vf_path = tempfile.mkstemp(suffix=".mp4", prefix="autowrec_", dir=vf_dir)
+    os.close(vf_fd)
+
+    # Redirect console to avoid encoding errors during test
+    _saved_console = _console_mod.console
+    _console_mod.console = _RichConsole(theme=_console_mod._theme, highlight=False, file=io.StringIO())
+
+    def fake_mkstemp(*args, **kwargs):
+        return (99, vf_path)
+
+    with patch.object(_rec_mod.tempfile, "mkstemp", side_effect=fake_mkstemp), \
+         patch.object(_rec_mod.os, "close", return_value=None), \
+         patch.object(ActionVideoRecorder, "start", return_value=False), \
+         patch.object(_rec_mod, "_init_blocklist", return_value=None), \
+         patch.object(_rec_mod, "BrowserAgent") as mock_ba:
+        mock_ba_inst = MagicMock()
+        mock_ba_inst.stats = {"blocked_by_blocklist": 0}
+        async def fake_session(*a, **kw):
+            return {}
+        mock_ba_inst.run_session = fake_session
+        mock_ba.return_value = mock_ba_inst
+        try:
+            _rec_mod.run_recording(url="about:blank", enable_video=True)
+        except Exception:
+            pass
+
+    _console_mod.console = _saved_console
+    check("video startup fail cleans temp file", not os.path.exists(vf_path))
+    shutil.rmtree(vf_dir, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────────
     section("RESULTS")

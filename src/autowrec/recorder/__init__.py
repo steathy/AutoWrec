@@ -126,7 +126,10 @@ def run_recording(
                         os.unlink(temp_video_path)
                     except OSError as exc:
                         warn(f"Could not remove temp video file {temp_video_path}: {exc}")
-                temp_video_path = None
+                    else:
+                        temp_video_path = None
+                else:
+                    temp_video_path = None
         session_data = asyncio.run(_browser_agent.run_session(url=url, on_browser_ready=_on_browser_ready))
     except Exception as exc:
         error(f"Recording session failed: {exc}")
