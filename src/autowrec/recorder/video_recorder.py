@@ -238,11 +238,9 @@ class ActionVideoRecorder:
 
     def stop(self) -> float | None:
         """Stops the recording thread and returns the exact start timestamp for alignment."""
-        if not self.is_recording:
-            return self.video_start_unix
-
-        info("Halting video recording...")
-        self.is_recording = False
+        if self.is_recording:
+            info("Halting video recording...")
+            self.is_recording = False
 
         if self.thread:
             self.thread.join(timeout=5)

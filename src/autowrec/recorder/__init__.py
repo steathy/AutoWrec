@@ -158,7 +158,7 @@ def run_recording(
                     else None
                 )
             except OSError as exc:
-                warn(f"Could not inspect temp video file: {exc}")
+                warn(f"Could not inspect temp video file {temp_video_path}: {exc}")
                 recorded_video = None
 
             try:
