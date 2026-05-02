@@ -61,6 +61,7 @@ class BrowserAgent:
         self.active_map = {}
         self.orphan_extra_info = {}
         self._streamed_bodies: dict[str, list[bytes]] = {}  # request_id -> list of raw chunks
+        self._request_tab: dict = {}  # request_id -> tab session for correct CDP calls
         self.stats = {
             "total_requests": 0,
             "completed": 0,
@@ -137,9 +138,13 @@ class BrowserAgent:
 
         if event.request_id in self.active_map:
             old_req = self.active_map[event.request_id]
-            if event.redirect_response and not old_req["response_data"]:
+            if event.redirect_response:
                 rd = event.redirect_response.to_json()
                 old_req["response_data"] = {"status": rd["status"], "headers": rd.get("headers", {}), "body": None}
+                old_req["request_state"] = "redirected"
+                old_req["redirect_target"] = event.request.url
+                self.stats.setdefault("redirected", 0)
+                self.stats["redirected"] += 1
             old_req.pop("_meta", None)
 
         unique_id = f"{event.request_id}_{uuid.uuid4().hex[:8]}"
@@ -232,8 +237,9 @@ class BrowserAgent:
             # getResponseBody fails for large/evicted responses.
             rid = str(event.request_id)
             self._streamed_bodies[rid] = []
+            tab = self._request_tab.get(event.request_id, self.tab)
             try:
-                buffered = await self.tab.send(cdp.network.stream_resource_content(request_id=event.request_id))
+                buffered = await tab.send(cdp.network.stream_resource_content(request_id=event.request_id))
                 # buffered contains any data Chrome already received before
                 # we enabled streaming — store it as the first chunk
                 if buffered:
@@ -282,8 +288,9 @@ class BrowserAgent:
                 else:
                     body_captured = False
                     # Primary: try getResponseBody (works for small/buffered responses)
+                    tab = self._request_tab.get(event.request_id, self.tab)
                     try:
-                        result = await self.tab.send(cdp.network.get_response_body(request_id=event.request_id))
+                        result = await tab.send(cdp.network.get_response_body(request_id=event.request_id))
                         if isinstance(result, tuple):
                             body, is_base64 = result
                             req["response_data"]["body"] = body
@@ -400,9 +407,17 @@ class BrowserAgent:
 
                 await tab_session.send(cdp.runtime.add_binding(name="sendActionToPython"))
 
-                # Bind our telemetry and network handlers to this specific tab
+                # Bind handlers — wrap request/response/loading to capture tab_session
+                # so CDP body-fetching commands go to the correct session
+                async def _make_request_handler(ts):
+                    async def handler(event):
+                        await self.request_handler(event)
+                        self._request_tab[event.request_id] = ts
+                    return handler
+
+                req_handler = await _make_request_handler(tab_session)
                 tab_session.add_handler(cdp.runtime.BindingCalled, self.binding_handler)
-                tab_session.add_handler(cdp.network.RequestWillBeSent, self.request_handler)
+                tab_session.add_handler(cdp.network.RequestWillBeSent, req_handler)
                 tab_session.add_handler(cdp.network.ResponseReceived, self.response_handler)
                 tab_session.add_handler(cdp.network.DataReceived, self.data_received_handler)
                 tab_session.add_handler(cdp.network.LoadingFinished, self.loading_finished_handler)
@@ -451,11 +466,13 @@ class BrowserAgent:
             self.tab.add_handler(cdp.network.RequestWillBeSentExtraInfo, self.req_extra_info)
             self.tab.add_handler(cdp.network.ResponseReceivedExtraInfo, self.res_extra_info)
 
+            from .. import config as _cfg
+            redact_js = f"window.__autowrec_redact = {'true' if _cfg.REDACT_SENSITIVE else 'false'};"
             await self.tab.send(
-                cdp.page.add_script_to_evaluate_on_new_document(source=self.telemetry_script, run_immediately=True)
+                cdp.page.add_script_to_evaluate_on_new_document(source=redact_js + self.telemetry_script, run_immediately=True)
             )
 
-            await self.tab.send(cdp.runtime.evaluate(expression=self.telemetry_script))
+            await self.tab.send(cdp.runtime.evaluate(expression=redact_js + self.telemetry_script))
 
             await self.browser.connection.send(
                 cdp.target.set_auto_attach(auto_attach=True, wait_for_debugger_on_start=False, flatten=True)

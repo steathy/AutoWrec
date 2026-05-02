@@ -49,7 +49,9 @@ def _init_blocklist() -> BlocklistDB | None:
         if not hosts_file.exists():
             info(f"Downloading blocklist '{name}' ...")
             try:
-                urllib.request.urlretrieve(url, str(hosts_file))
+                req = urllib.request.Request(url, headers={"User-Agent": "AutoWrec"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    hosts_file.write_bytes(resp.read())
                 info(f"Saved {hosts_file.name}")
             except Exception as exc:
                 warn(f"Failed to download blocklist '{name}': {exc}")

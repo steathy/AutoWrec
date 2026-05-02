@@ -40,6 +40,9 @@ FPS = 3
 SEGMENT_PAD_SECONDS = 2
 MERGE_GAP_THRESHOLD_SECONDS = 1.5
 
+# ── Redaction ───────────────────────────────────────────────────────────────
+REDACT_SENSITIVE = False
+
 # ── Blocklist ───────────────────────────────────────────────────────────────
 BLOCKLIST_ENABLED = True
 BLOCKLIST_SOURCES = {
@@ -81,6 +84,11 @@ merge_gap_threshold     = 1.5
 # Disable to capture all requests unfiltered.
 blocklist_enabled       = true
 
+# Redact sensitive values (passwords, auth headers, cookies) in captures.
+# Default: false (full capture for throwaway-account testing).
+# Enable when recording with real accounts or sharing workspaces.
+redact_sensitive        = false
+
 [agent]
 # How long (seconds) a single IPython cell is allowed to run in the sandbox.
 sandbox_timeout = 60
@@ -117,7 +125,7 @@ def _load_config_toml():
     """
     global SANDBOX_TIMEOUT_SECONDS
     global FPS, SEGMENT_PAD_SECONDS, MERGE_GAP_THRESHOLD_SECONDS
-    global BLOCKLIST_ENABLED
+    global REDACT_SENSITIVE, BLOCKLIST_ENABLED
     global BANNER_ENABLED, BANNER_SPEED
     global OUTPUT_DIR, WORKSPACE_DIR, BLOCKLIST_DIR, BLOCKLIST_DB
     global MCP_VIDEO_ENABLED
@@ -133,7 +141,9 @@ def _load_config_toml():
     try:
         with open(CONFIG_FILE, "rb") as f:
             data = tomllib.load(f)
-    except Exception:
+    except Exception as exc:
+        import sys
+        print(f"[WARN] Failed to parse {CONFIG_FILE}: {exc}", file=sys.stderr)
         return
 
     # [agent] (legacy — only sandbox_timeout is still used)
@@ -151,6 +161,8 @@ def _load_config_toml():
         MERGE_GAP_THRESHOLD_SECONDS = float(rec["merge_gap_threshold"])
     if "blocklist_enabled" in rec:
         BLOCKLIST_ENABLED = bool(rec["blocklist_enabled"])
+    if "redact_sensitive" in rec:
+        REDACT_SENSITIVE = bool(rec["redact_sensitive"])
 
     # [banner]
     banner = data.get("banner", {})
@@ -171,6 +183,13 @@ def _load_config_toml():
     mcp_cfg = data.get("mcp", {})
     if "video_enabled" in mcp_cfg:
         MCP_VIDEO_ENABLED = bool(mcp_cfg["video_enabled"])
+
+    # Range validation
+    FPS = max(1, FPS)
+    SEGMENT_PAD_SECONDS = max(0.0, SEGMENT_PAD_SECONDS)
+    MERGE_GAP_THRESHOLD_SECONDS = max(0.0, MERGE_GAP_THRESHOLD_SECONDS)
+    SANDBOX_TIMEOUT_SECONDS = max(1, SANDBOX_TIMEOUT_SECONDS)
+    BANNER_SPEED = max(0.1, BANNER_SPEED)
 
 
 _load_config_toml()

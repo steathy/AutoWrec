@@ -85,7 +85,7 @@ def _build_server():
     @mcp.tool()
     def record_session(
         url: Annotated[str, "The starting URL to navigate to"] = "about:blank",
-        enable_video: Annotated[bool, "Whether to record screen video"] = False,
+        enable_video: Annotated[bool | None, "Whether to record screen video (default: from config)"] = None,
     ) -> str:
         """Record a browser session. Launches Chrome with CDP instrumentation.
         The user browses freely and closes the browser or presses Ctrl+C to stop.
@@ -98,6 +98,9 @@ def _build_server():
         """
         from . import config
         from .recorder import run_recording
+
+        if enable_video is None:
+            enable_video = config.MCP_VIDEO_ENABLED
 
         config.ensure_output_dirs()
 
@@ -138,6 +141,8 @@ def _build_server():
         page navigations) and network_request (method, url, status, folder ref).
         Use offset/limit for large timelines.
         """
+        offset = max(0, offset)
+        limit = max(1, min(limit, 1000))
         workspace = _get_workspace()
         timeline_path = os.path.join(workspace, "timeline.json")
         if not os.path.exists(timeline_path):
@@ -171,39 +176,36 @@ def _build_server():
 
         max_body_size = 100_000
 
+        def _read_body(file_path, max_size):
+            size = os.path.getsize(file_path)
+            with open(file_path, "rb") as f:
+                raw = f.read(max_size)
+            try:
+                return {"content": raw.decode("utf-8"), "truncated": size > max_size}
+            except UnicodeDecodeError:
+                return {
+                    "content": base64.b64encode(raw).decode("ascii"),
+                    "encoding": "base64",
+                    "truncated": size > max_size,
+                }
+
         if include_request_body:
             req_files = [f for f in os.listdir(folder_path) if f.startswith("req_payload")]
             if req_files:
-                req_path = os.path.join(folder_path, req_files[0])
-                size = os.path.getsize(req_path)
-                try:
-                    with open(req_path, encoding="utf-8", errors="replace") as f:
-                        content = f.read(max_body_size)
-                    result["request_body"] = content
-                    result["request_body_truncated"] = size > max_body_size
-                except Exception:
-                    with open(req_path, "rb") as f:
-                        raw = f.read(max_body_size)
-                    result["request_body"] = base64.b64encode(raw).decode("ascii")
-                    result["request_body_encoding"] = "base64"
-                    result["request_body_truncated"] = size > max_body_size
+                body = _read_body(os.path.join(folder_path, req_files[0]), max_body_size)
+                result["request_body"] = body["content"]
+                result["request_body_truncated"] = body["truncated"]
+                if "encoding" in body:
+                    result["request_body_encoding"] = body["encoding"]
 
         if include_response_body:
             res_files = [f for f in os.listdir(folder_path) if f.startswith("res_body")]
             if res_files:
-                res_path = os.path.join(folder_path, res_files[0])
-                size = os.path.getsize(res_path)
-                try:
-                    with open(res_path, encoding="utf-8", errors="replace") as f:
-                        content = f.read(max_body_size)
-                    result["response_body"] = content
-                    result["response_body_truncated"] = size > max_body_size
-                except Exception:
-                    with open(res_path, "rb") as f:
-                        raw = f.read(max_body_size)
-                    result["response_body"] = base64.b64encode(raw).decode("ascii")
-                    result["response_body_encoding"] = "base64"
-                    result["response_body_truncated"] = size > max_body_size
+                body = _read_body(os.path.join(folder_path, res_files[0]), max_body_size)
+                result["response_body"] = body["content"]
+                result["response_body_truncated"] = body["truncated"]
+                if "encoding" in body:
+                    result["response_body_encoding"] = body["encoding"]
 
         return json.dumps(result, indent=2)
 
@@ -238,6 +240,8 @@ def _build_server():
         """Read any file from the session workspace by relative path.
         Text files returned as UTF-8, binary as base64. Use offset/limit for large files.
         """
+        offset = max(0, offset)
+        limit = max(1, min(limit, 1_000_000))
         workspace = _get_workspace()
         file_path = _safe_resolve(workspace, path)
 
@@ -279,6 +283,7 @@ def _build_server():
         Use this to visually inspect what happened during a recorded action.
         The frames are evenly spaced across the clip duration.
         """
+        num_frames = max(1, min(num_frames, 12))
         workspace = _get_workspace()
         video_path = _safe_resolve(workspace, clip_path)
 

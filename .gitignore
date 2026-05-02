@@ -25,6 +25,7 @@ bin/
 
 # Output / workspace artifacts
 output/
+plans/
 
 # Logs
 *.log

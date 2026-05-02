@@ -266,13 +266,20 @@
     }, true);
 
     // 2. Track Input Changes (Restored)
+    const _sensitiveFieldPattern = /pass|token|secret|key|otp|ssn|cvv|pwd|credential/i;
+    function _shouldRedact(el) {
+        if (typeof window.__autowrec_redact === 'undefined' || !window.__autowrec_redact) return false;
+        if (el.type === 'password') return true;
+        const name = (el.name || el.id || '').toLowerCase();
+        return _sensitiveFieldPattern.test(name);
+    }
     document.addEventListener('change', (e) => {
         if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
             emitAction({
                 type: 'input',
                 tag: e.target.tagName,
                 name: e.target.name || e.target.id || '',
-                value: e.target.value
+                value: _shouldRedact(e.target) ? '[REDACTED]' : e.target.value
             });
         }
     }, true);

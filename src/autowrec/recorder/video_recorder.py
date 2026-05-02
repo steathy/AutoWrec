@@ -122,7 +122,12 @@ class ActionVideoRecorder:
         self.thread = threading.Thread(target=self._record_loop, daemon=True)
         self.thread.start()
 
+        deadline = time.time() + 10.0
         while self.video_start_unix is None and self.is_recording:
+            if time.time() > deadline:
+                warn("Video recorder failed to start within 10s — disabling video.")
+                self.is_recording = False
+                return
             time.sleep(0.01)
 
     def _record_loop(self) -> None:
@@ -133,6 +138,7 @@ class ActionVideoRecorder:
             with mss.mss() as sct:
                 if not sct.monitors or len(sct.monitors) < 2:
                     error("No monitors detected — cannot record screen.")
+                    self.is_recording = False
                     return
 
                 # Start with full-screen capture immediately so start() unblocks.
@@ -173,6 +179,7 @@ class ActionVideoRecorder:
                                     except Exception:
                                         pass
                                     writer = None
+                                self.video_start_unix = time.time()
 
                     # Lazily create the writer (or recreate after Chrome lock-in)
                     if writer is None:

@@ -30,6 +30,7 @@ class AgentSandbox:
         self._ready = threading.Event()
         self._executing = threading.Event()
         self._cancel_flag = threading.Event()
+        self._execute_lock = threading.Lock()
         self._cancel_result: str | None = None
 
         threading.Thread(target=self._background_start, daemon=True).start()
@@ -117,6 +118,10 @@ class AgentSandbox:
         return None
 
     def execute(self, code: str, custom_timeout: int | None = None, is_restore: bool = False) -> str:
+        with self._execute_lock:
+            return self._execute_impl(code, custom_timeout, is_restore)
+
+    def _execute_impl(self, code: str, custom_timeout: int | None = None, is_restore: bool = False) -> str:
         self._wait_ready()
         magic_res = self.handle_magic_commands(code)
         if magic_res is not None:
@@ -185,6 +190,9 @@ class AgentSandbox:
                     else:
                         logger.error(f"Hard Timeout reached for {cell_id}. Process unresponsive. Hard killing...")
                         self.start_process()
+                        status, code_exit, ret_val = "error", 124, ""
+                        fatal_timeout = True
+                        timeout_msg = "\n[HARD TIMEOUT: Process killed and restarted. Run `%restore` to recover.]"
 
         finally:
             self._executing.clear()

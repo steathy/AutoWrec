@@ -21,10 +21,11 @@ except ImportError:
     MAGIKA_AVAILABLE = False
     warn("Magika not installed. Skipping advanced content type detection.")
 
-WORKSPACE_DIR = str(config.WORKSPACE_DIR)
-OUTPUT_DIR = os.path.join(WORKSPACE_DIR, "session_dump")
-CLIPS_DIR = os.path.join(OUTPUT_DIR, "clips")
-REQUESTS_DIR = os.path.join(OUTPUT_DIR, "requests")
+def _get_paths():
+    """Derive workspace paths from current config (not cached at import time)."""
+    workspace = str(config.WORKSPACE_DIR)
+    output = os.path.join(workspace, "session_dump")
+    return workspace, output, os.path.join(output, "clips"), os.path.join(output, "requests")
 
 
 def sanitize_filename(name: str) -> str:
@@ -42,6 +43,23 @@ def make_serializable(obj):
     if isinstance(obj, dict):
         return {k: make_serializable(v) for k, v in obj.items()}
     return str(obj)
+
+
+_REDACT_HEADERS = {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-csrf-token"}
+
+
+def _redact_headers(headers: dict) -> dict:
+    if not headers or not config.REDACT_SENSITIVE:
+        return headers
+    redacted = {}
+    for k, v in headers.items():
+        if k.lower() in _REDACT_HEADERS:
+            prefix = v.split(" ", 1)[0] if " " in v and k.lower() == "authorization" else ""
+            tag = f"{prefix} " if prefix else ""
+            redacted[k] = f"{tag}[REDACTED — {len(v)} chars]"
+        else:
+            redacted[k] = v
+    return redacted
 
 
 def get_header_val(headers, key):
@@ -97,7 +115,7 @@ def detect_content_type(content, is_base64=False):
             byte_content = content
         else:
             return None
-        result = magika_detector.identify_bytes(byte_content)
+        result = magika_detector.identify_bytes(byte_content[:262144])
         return {
             "label": result.output.label,
             "mime_type": result.output.mime_type,
@@ -170,6 +188,7 @@ def merge_and_annotate_actions(
 
     recorder = ActionVideoRecorder(fps=config.FPS)
 
+    _, _, clips_dir, _ = _get_paths()
     info(f"Splitting {len(merged_clips)} video action segments...")
     for idx, cluster in enumerate(merged_clips):
         first_action_time_relative = cluster[0]["timestamp_unix"] - video_start_unix
@@ -179,7 +198,7 @@ def merge_and_annotate_actions(
         clip_end = last_action_time_relative + config.SEGMENT_PAD_SECONDS
 
         clip_filename = f"action_clip_{idx:03d}.mp4"
-        clip_path = os.path.join(CLIPS_DIR, clip_filename)
+        clip_path = os.path.join(clips_dir, clip_filename)
 
         clip_ok = recorder.split_video(full_video_path, clip_path, clip_start, clip_end)
         if clip_ok:
@@ -194,18 +213,19 @@ def merge_and_annotate_actions(
 def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
     timeline_requests = []
     detection_stats = {"request_detected": 0, "response_detected": 0, "mismatches": 0}
+    _, _, _, requests_dir = _get_paths()
 
     for idx, item in enumerate(requests):
         try:
             parsed_url = urlparse(item.get("url", ""))
             domain = parsed_url.netloc or "unknown"
             folder_name = f"{idx:03d}_{item.get('method', 'UNK')}_{sanitize_filename(domain)}"
-            req_root = os.path.join(REQUESTS_DIR, folder_name)
+            req_root = os.path.join(requests_dir, folder_name)
             os.makedirs(req_root, exist_ok=True)
 
-            req_headers = item.get("headers", {})
+            req_headers = _redact_headers(item.get("headers", {}))
             res_data = item.get("response_data") or {}
-            res_headers = res_data.get("headers") or {}
+            res_headers = _redact_headers(res_data.get("headers") or {})
 
             request_detection = None
             if item.get("post_data"):
@@ -291,7 +311,8 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
         except Exception as e:
             error(f"Failed to process request at index {idx}: {e}")
             log_exception()
-            error_filename = os.path.join(OUTPUT_DIR, f"CRASH_REPORT_{idx:03d}.txt")
+            _, output_dir, _, _ = _get_paths()
+            error_filename = os.path.join(output_dir, f"CRASH_REPORT_{idx:03d}.txt")
             try:
                 with open(error_filename, "w", encoding="utf-8") as debug_f:
                     debug_f.write(f"ERROR: {str(e)}\n" + "-" * 50 + "\n")
@@ -312,9 +333,11 @@ def compile_workspace(
     rule("Compiling Workspace", style="bold cyan")
     info("Extracting data...")
 
+    _, OUTPUT_DIR, CLIPS_DIR, REQUESTS_DIR = _get_paths()
+
     try:
-        if os.path.exists(WORKSPACE_DIR):
-            shutil.rmtree(WORKSPACE_DIR)
+        if os.path.exists(OUTPUT_DIR):
+            shutil.rmtree(OUTPUT_DIR)
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         os.makedirs(CLIPS_DIR, exist_ok=True)
         os.makedirs(REQUESTS_DIR, exist_ok=True)

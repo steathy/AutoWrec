@@ -78,6 +78,8 @@ def _apply_config_overrides(args):
         config.BANNER_ENABLED = False
     if getattr(args, "no_blocklist", False):
         config.BLOCKLIST_ENABLED = False
+    if getattr(args, "redact", False):
+        config.REDACT_SENSITIVE = True
     if getattr(args, "verbose", False):
         config.VERBOSE = True
 
@@ -158,6 +160,7 @@ def _print_rich_help():
     t4.add_row("--output-dir PATH", "Root directory for all output (default: ./output)")
     t4.add_row("--no-banner", "Skip the startup animation")
     t4.add_row("--no-blocklist", "Disable ad/tracker domain filtering")
+    t4.add_row("--redact", "Redact passwords, auth headers, and cookies")
     t4.add_row("--verbose", "Show detailed diagnostic output")
     t4.add_row("-V, --version", "Show version")
     t4.add_row("-h, --help", "Show this help message")
@@ -191,7 +194,7 @@ def main():
 
     cmd = _peek_command()
 
-    if config.BANNER_ENABLED and cmd == "record":
+    if config.BANNER_ENABLED and cmd == "record" and "--no-banner" not in sys.argv:
         show_startup(
             version=config.VERSION,
             model="MCP",
@@ -216,6 +219,7 @@ def main():
         p.add_argument("--output-dir", metavar="PATH")
         p.add_argument("--no-banner", action="store_true", default=False)
         p.add_argument("--no-blocklist", action="store_true", default=False)
+        p.add_argument("--redact", action="store_true", default=False)
         p.add_argument("--verbose", action="store_true", default=False)
         p.add_argument("-h", "--help", action="store_true", default=False, dest="help_flag")
         p.add_argument("-V", "--version", action="store_true", default=False)

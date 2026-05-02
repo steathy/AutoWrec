@@ -138,7 +138,7 @@ def _download_file(url: str, dest: Path, label: str | None = None):
 
     # Open the connection to get Content-Length.
     req = urllib.request.Request(url, headers={"User-Agent": "AutoWrec/bin-manager"})
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=60) as resp:
         total = int(resp.headers.get("Content-Length", 0))
 
         with Progress(

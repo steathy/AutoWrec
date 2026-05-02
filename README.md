@@ -110,6 +110,7 @@ Options:
 --output-dir PATH     Root directory for all output (default: ./output)
 --no-banner           Skip the startup animation
 --no-blocklist        Disable ad/tracker domain filtering
+--redact              Redact passwords, auth headers, and cookies
 --verbose             Show detailed diagnostic output
 -V, --version         Show version
 -h, --help            Show help
@@ -149,6 +150,7 @@ fps = 3                    # Frames per second for video capture
 segment_pad = 2            # Seconds of padding around action clips
 merge_gap_threshold = 1.5  # Merge clips closer than this
 blocklist_enabled = true   # Filter ad/tracker domains from captures
+redact_sensitive = false   # Redact passwords, auth headers, cookies
 
 [agent]
 sandbox_timeout = 60       # Seconds per IPython cell
@@ -196,14 +198,15 @@ tests/
 
 ## Key Features
 
-- **Chrome-only video capture** — records only the Chrome window, not your full desktop. Tracks window position if you move it.
-- **PID-based window targeting** — correctly identifies the recording Chrome instance even if you have other Chrome windows open.
+- **Chrome-only video capture (Windows)** — records only the Chrome window, not your full desktop. Tracks window position if you move it. On Linux/macOS, falls back to full-screen capture.
+- **PID-based window targeting** — correctly identifies the recording Chrome instance even if you have other Chrome windows open (Windows).
 - **Browser close detection** — closing the Chrome window automatically stops the recording (no Ctrl+C needed).
 - **Zero LLM dependencies** — no API keys, no litellm, no instructor. The host AI provides all intelligence.
 - **Path traversal protection** — all file access tools validate paths stay within the workspace.
 - **Stderr-safe console** — all Rich output redirected to stderr in MCP mode so stdout remains clean for JSON-RPC.
 - **Persistent sandbox** — IPython state (variables, imports) persists across `execute_code` calls.
 - **Ad/tracker filtering** — SQLite-backed domain blocklist with LRU cache filters noise from captured traffic. Toggleable via config or `--no-blocklist`.
+- **Opt-in redaction** — `--redact` flag or config to sanitize passwords, auth headers, and cookies in captures. Off by default for throwaway-account testing.
 
 ## Requirements
 
