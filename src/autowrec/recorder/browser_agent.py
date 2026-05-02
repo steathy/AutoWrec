@@ -524,6 +524,8 @@ class BrowserAgent:
         prev_count = pending
 
         while self.active_map and loop.time() < deadline:
+            if not self.recording_active:
+                break
             current_count = len(self.active_map)
             if current_count != prev_count:
                 # Map changed — something resolved, reset the idle timer

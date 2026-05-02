@@ -27,7 +27,7 @@ _video_recorder: ActionVideoRecorder | None = None
 
 
 def _handle_sigint(signum, frame):
-    """Ctrl+C during recording = graceful stop."""
+    """Ctrl+C during recording — fast path only. Heavy cleanup in run_recording's finally block."""
     info("Ctrl+C detected. Shutting down recorder...")
     if _browser_agent:
         _browser_agent.stop()

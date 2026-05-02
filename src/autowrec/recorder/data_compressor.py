@@ -240,6 +240,11 @@ def merge_and_annotate_actions(
 
 
 def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
+    """Process captured requests into transaction files and timeline events.
+
+    NOTE: Mutates the input list in place — pops post_data and response body
+    after saving to disk to free memory for large sessions.
+    """
     timeline_requests = []
     detection_stats = {"request_detected": 0, "response_detected": 0, "mismatches": 0}
     _, _, _, requests_dir = _get_paths()
@@ -259,13 +264,13 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
             request_detection = None
             if item.get("post_data"):
                 request_detection = detect_content_type(item["post_data"])
-                if request_detection:
+                if request_detection and "error" not in request_detection:
                     detection_stats["request_detected"] += 1
 
             response_detection = None
             if res_data and res_data.get("body"):
                 response_detection = detect_content_type(res_data["body"], res_data.get("base64_encoded", False))
-                if response_detection:
+                if response_detection and "error" not in response_detection:
                     detection_stats["response_detected"] += 1
 
             declared_mime = res_data.get("mime_type", "unknown")
@@ -321,6 +326,7 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
             if item.get("post_data"):
                 ext = request_detection.get("extension", "bin") if request_detection else "bin"
                 save_content(os.path.join(req_root, f"req_payload.{ext}"), item["post_data"])
+                item.pop("post_data", None)  # Free memory after saving to disk
 
             if res_data and res_data.get("body"):
                 ext = response_detection.get("extension", "bin") if response_detection else "bin"
