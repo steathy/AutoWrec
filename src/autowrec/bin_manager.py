@@ -140,6 +140,9 @@ _EXPECTED_HASHES = {
     ("jq", "windows", "amd64"): "7451fbbf37feffb9bf262bd97c54f0da558c63f0748e64152dd87b0a07b6d6ab",
     ("rg", "windows", "amd64"): "f162b54de2adfc72d78adb1dbada2dedda111ae0a5e2f6e9500f4f909664c5d2",
     ("sd", "windows", "amd64"): "8a6d3c25659bab304bd5497cbcf5ac93698b4fda4421b5eac8985e6e51f6cbfa",
+    ("rg", "linux", "amd64"): "f401154e2393f9002ac77e419f9ee5521c18f4f8cd3e32293972f493ba06fce7",
+    ("jq", "linux", "amd64"): "5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5",
+    ("sd", "linux", "amd64"): "8c48812cfde93e61bebabd29b87158cdc1ee84e3bd63e5e21f4332c658b23005",
 }
 
 # Busybox hashes keyed by source filename (variant-specific).
@@ -228,10 +231,16 @@ def _make_executable(path: Path):
 def _extract_binary_from_archive(archive_path: Path, binary_name: str, dest: Path):
     archive_str = str(archive_path)
 
+    # Match only the exact binary name as a top-level entry or path component
+    # (e.g. "rg" or "foo/rg"), NOT siblings like "completions/_sd" that happen
+    # to end with the binary name as a substring.
+    def _is_match(name: str) -> bool:
+        return name == binary_name or name.endswith("/" + binary_name)
+
     if archive_str.endswith(".zip"):
         with zipfile.ZipFile(archive_path, "r") as zf:
             for member in zf.namelist():
-                if member.endswith(binary_name):
+                if _is_match(member):
                     with zf.open(member) as src, open(dest, "wb") as dst:
                         dst.write(src.read())
                     _make_executable(dest)
@@ -240,7 +249,7 @@ def _extract_binary_from_archive(archive_path: Path, binary_name: str, dest: Pat
     elif archive_str.endswith(".tar.gz") or archive_str.endswith(".tgz"):
         with tarfile.open(archive_path, "r:gz") as tf:
             for member in tf.getmembers():
-                if member.name.endswith(binary_name):
+                if _is_match(member.name):
                     f = tf.extractfile(member)
                     if f:
                         with open(dest, "wb") as dst:
