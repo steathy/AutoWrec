@@ -149,7 +149,13 @@ def run_recording(
             pass
 
         if session_data:
-            recorded_video = temp_video_path if video_start_unix else None
+            recorded_video = (
+                temp_video_path
+                if video_start_unix and temp_video_path
+                and os.path.exists(temp_video_path)
+                and os.path.getsize(temp_video_path) > 5000
+                else None
+            )
 
             try:
                 success = compile_workspace(
