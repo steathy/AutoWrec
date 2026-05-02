@@ -35,7 +35,7 @@ def _build_server():
             "AutoWrec records browser sessions and lets you explore the captured "
             "data (network requests, user actions, video). Use record_session to "
             "capture a session, then explore the workspace with read_* tools. "
-            "Use execute_code to run Python in a persistent sandbox for building "
+            "Use execute_code to run Python in a persistent environment for building "
             "automation scripts. No API keys are needed — you are the AI."
         ),
     )
@@ -350,11 +350,12 @@ def _build_server():
 
     @mcp.tool()
     def execute_code(
-        code: Annotated[str, "Python/IPython code to execute in the persistent sandbox"],
+        code: Annotated[str, "Python/IPython code to execute in the persistent Python environment"],
         timeout: Annotated[int | None, "Override timeout in seconds (default: from config)"] = None,
     ) -> str:
-        """Execute Python code in a persistent IPython sandbox.
+        """Execute Python code in a persistent IPython environment.
         State persists across calls (variables, imports, session history).
+        Code runs with the user's local permissions — this is not a security sandbox.
         Supports: magic commands, !shell commands (rg, jq, grep, ls, cat, etc.),
         %reset (wipe state), %restore (replay history), %view_output Cell_N.
 

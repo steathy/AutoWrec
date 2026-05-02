@@ -108,11 +108,11 @@ class ActionVideoRecorder:
         """Set the Chrome process PID so the recorder captures the right window."""
         self._target_pid = pid
 
-    def start(self) -> None:
-        """Starts the screen recording in a background thread."""
+    def start(self) -> bool:
+        """Starts the screen recording in a background thread. Returns True on success."""
         if self.is_recording:
             warn("Recording is already active.")
-            return
+            return True
 
         output_dir = os.path.dirname(self.output_path)
         if output_dir and not os.path.exists(output_dir):
@@ -127,8 +127,10 @@ class ActionVideoRecorder:
             if time.time() > deadline:
                 warn("Video recorder failed to start within 10s — disabling video.")
                 self.is_recording = False
-                return
+                return False
             time.sleep(0.01)
+
+        return self.is_recording
 
     def _record_loop(self) -> None:
         """The core recording loop executed by the background thread."""

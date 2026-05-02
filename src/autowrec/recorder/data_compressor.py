@@ -53,6 +53,7 @@ def _redact_headers(headers: dict) -> dict:
         return headers
     redacted = {}
     for k, v in headers.items():
+        v = str(v)
         if k.lower() in _REDACT_HEADERS:
             prefix = v.split(" ", 1)[0] if " " in v and k.lower() == "authorization" else ""
             tag = f"{prefix} " if prefix else ""

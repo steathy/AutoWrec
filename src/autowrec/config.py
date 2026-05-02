@@ -146,19 +146,31 @@ def _load_config_toml():
         print(f"[WARN] Failed to parse {CONFIG_FILE}: {exc}", file=sys.stderr)
         return
 
+    def _safe_int(val, default):
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return default
+
+    def _safe_float(val, default):
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return default
+
     # [agent] (legacy — only sandbox_timeout is still used)
     agent = data.get("agent", {})
     if "sandbox_timeout" in agent:
-        SANDBOX_TIMEOUT_SECONDS = int(agent["sandbox_timeout"])
+        SANDBOX_TIMEOUT_SECONDS = _safe_int(agent["sandbox_timeout"], SANDBOX_TIMEOUT_SECONDS)
 
     # [recording]
     rec = data.get("recording", {})
     if "fps" in rec:
-        FPS = int(rec["fps"])
+        FPS = _safe_int(rec["fps"], FPS)
     if "segment_pad" in rec:
-        SEGMENT_PAD_SECONDS = float(rec["segment_pad"])
+        SEGMENT_PAD_SECONDS = _safe_float(rec["segment_pad"], SEGMENT_PAD_SECONDS)
     if "merge_gap_threshold" in rec:
-        MERGE_GAP_THRESHOLD_SECONDS = float(rec["merge_gap_threshold"])
+        MERGE_GAP_THRESHOLD_SECONDS = _safe_float(rec["merge_gap_threshold"], MERGE_GAP_THRESHOLD_SECONDS)
     if "blocklist_enabled" in rec:
         BLOCKLIST_ENABLED = bool(rec["blocklist_enabled"])
     if "redact_sensitive" in rec:
@@ -169,7 +181,7 @@ def _load_config_toml():
     if "enabled" in banner:
         BANNER_ENABLED = bool(banner["enabled"])
     if "speed" in banner:
-        BANNER_SPEED = float(banner["speed"])
+        BANNER_SPEED = _safe_float(banner["speed"], BANNER_SPEED)
 
     # [output]
     output = data.get("output", {})

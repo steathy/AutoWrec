@@ -17,7 +17,7 @@ You browse a website         AutoWrec captures everything          AI explores v
 
 **Explore** — The AI tool reads the structured workspace through MCP tools: session summaries, paginated timelines, individual HTTP transactions, file contents, and extracted video frames.
 
-**Build** — The AI tool uses the persistent IPython sandbox to test hypotheses against the live site and assemble a standalone automation script.
+**Build** — The AI tool uses the persistent Python environment to test hypotheses against the live site and assemble a standalone automation script.
 
 ## Installation
 
@@ -86,7 +86,7 @@ After adding the config, restart Claude Code. You should see `autowrec` listed w
 | `list_workspace_files` | Browse the workspace directory |
 | `read_file` | Read any file with byte-level pagination |
 | `extract_video_frames` | Get base64 JPEG frames from video clips |
-| `execute_code` | Run Python in a persistent IPython sandbox |
+| `execute_code` | Run Python in a persistent IPython environment |
 
 #### Example MCP Workflow
 
@@ -169,7 +169,7 @@ speed = 1.0
 python tests/test_standalone.py
 ```
 
-Runs 54 tests covering imports, config, MCP tools, path traversal protection, workspace operations, IPython sandbox, and console redirect safety.
+Runs 70 tests covering imports, config, MCP tools, path traversal protection, workspace operations, IPython execution, console redirect safety, redaction, input validation, and binary body encoding.
 
 ## Architecture
 
@@ -204,7 +204,7 @@ tests/
 - **Zero LLM dependencies** — no API keys, no litellm, no instructor. The host AI provides all intelligence.
 - **Path traversal protection** — all file access tools validate paths stay within the workspace.
 - **Stderr-safe console** — all Rich output redirected to stderr in MCP mode so stdout remains clean for JSON-RPC.
-- **Persistent sandbox** — IPython state (variables, imports) persists across `execute_code` calls.
+- **Persistent Python environment** — IPython state (variables, imports) persists across `execute_code` calls. Runs with local user permissions.
 - **Ad/tracker filtering** — SQLite-backed domain blocklist with LRU cache filters noise from captured traffic. Toggleable via config or `--no-blocklist`.
 - **Opt-in redaction** — `--redact` flag or config to sanitize passwords, auth headers, and cookies in captures. Off by default for throwaway-account testing.
 

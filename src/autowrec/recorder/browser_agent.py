@@ -74,6 +74,7 @@ class BrowserAgent:
             "body_skip_cached": 0,
             "body_from_stream": 0,
             "blocked_by_blocklist": 0,
+            "redirected": 0,
         }
 
         self.telemetry_script = ""
@@ -143,7 +144,6 @@ class BrowserAgent:
                 old_req["response_data"] = {"status": rd["status"], "headers": rd.get("headers", {}), "body": None}
                 old_req["request_state"] = "redirected"
                 old_req["redirect_target"] = event.request.url
-                self.stats.setdefault("redirected", 0)
                 self.stats["redirected"] += 1
             old_req.pop("_meta", None)
 
@@ -328,6 +328,7 @@ class BrowserAgent:
                             warn(f"Body fetch failed for {req['url'][:60]}: {req.get('body_fetch_error', 'unknown')}")
 
             self._streamed_bodies.pop(str(event.request_id), None)
+            self._request_tab.pop(event.request_id, None)
             self.active_map.pop(event.request_id, None)
 
     async def loading_failed_handler(self, event: cdp.network.LoadingFailed):
@@ -340,6 +341,7 @@ class BrowserAgent:
             req["blocked_reason"] = str(event.blocked_reason) if event.blocked_reason else None
             self.stats["failed"] += 1
             self._streamed_bodies.pop(str(event.request_id), None)
+            self._request_tab.pop(event.request_id, None)
             self.active_map.pop(event.request_id, None)
             warn(f"Request failed: {req['url'][:60]} - {event.error_text}")
 
@@ -409,13 +411,13 @@ class BrowserAgent:
 
                 # Bind handlers — wrap request/response/loading to capture tab_session
                 # so CDP body-fetching commands go to the correct session
-                async def _make_request_handler(ts):
+                def _make_request_handler(ts):
                     async def handler(event):
                         await self.request_handler(event)
                         self._request_tab[event.request_id] = ts
                     return handler
 
-                req_handler = await _make_request_handler(tab_session)
+                req_handler = _make_request_handler(tab_session)
                 tab_session.add_handler(cdp.runtime.BindingCalled, self.binding_handler)
                 tab_session.add_handler(cdp.network.RequestWillBeSent, req_handler)
                 tab_session.add_handler(cdp.network.ResponseReceived, self.response_handler)
@@ -588,6 +590,7 @@ class BrowserAgent:
                 "total_requests": self.stats["total_requests"],
                 "completed_requests": self.stats["completed"],
                 "failed_requests": self.stats["failed"],
+                "redirected_requests": self.stats["redirected"],
                 "incomplete_requests": self.stats["incomplete"],
                 "total_actions": len(self.captured_actions),
                 "blocked_by_blocklist": self.stats["blocked_by_blocklist"],

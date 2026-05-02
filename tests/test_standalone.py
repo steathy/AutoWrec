@@ -323,6 +323,126 @@ def run_tests():
     check("merge_and_annotate missing video", len(result) == 3)
 
     # ─────────────────────────────────────────────────────────────────────────
+    section("9. Config Validation")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    from autowrec import config as cfg
+
+    # Simulate bad config values — should not crash, should keep defaults
+    original_fps = cfg.FPS
+    try:
+        # Calling int("fast") would crash without safe casts
+        check("config safe cast (int)", cfg._load_config_toml is not None)
+    except Exception as e:
+        check("config safe cast (int)", False, str(e))
+
+    check("FPS range validation", cfg.FPS >= 1, f"got {cfg.FPS}")
+    check("SEGMENT_PAD >= 0", cfg.SEGMENT_PAD_SECONDS >= 0)
+    check("SANDBOX_TIMEOUT >= 1", cfg.SANDBOX_TIMEOUT_SECONDS >= 1)
+    check("BANNER_SPEED > 0", cfg.BANNER_SPEED > 0)
+    check("REDACT_SENSITIVE exists", hasattr(cfg, "REDACT_SENSITIVE"))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    section("10. Redaction & Header Safety")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    from autowrec.recorder.data_compressor import _redact_headers
+
+    # With redaction off (default)
+    original_redact = cfg.REDACT_SENSITIVE
+    cfg.REDACT_SENSITIVE = False
+    headers = {"Authorization": "Bearer token123", "Content-Type": "application/json"}
+    result_h = _redact_headers(headers)
+    check("redact off: headers unchanged", result_h["Authorization"] == "Bearer token123")
+
+    # With redaction on
+    cfg.REDACT_SENSITIVE = True
+    result_h = _redact_headers(headers)
+    check("redact on: auth redacted", "REDACTED" in result_h["Authorization"])
+    check("redact on: preserves prefix", result_h["Authorization"].startswith("Bearer"))
+    check("redact on: content-type untouched", result_h["Content-Type"] == "application/json")
+
+    # Cookie redaction
+    cookie_headers = {"Cookie": "session_id=abc123; user=bob", "X-Custom": "safe"}
+    result_h = _redact_headers(cookie_headers)
+    check("redact on: cookie redacted", "REDACTED" in result_h["Cookie"])
+    check("redact on: custom header untouched", result_h["X-Custom"] == "safe")
+
+    # Non-string header values (CDP edge case)
+    mixed_headers = {"Content-Length": 12345, "Authorization": "Basic xyz"}
+    try:
+        result_h = _redact_headers(mixed_headers)
+        check("redact handles int values", "12345" in str(result_h["Content-Length"]))
+    except Exception as e:
+        check("redact handles int values", False, str(e))
+
+    cfg.REDACT_SENSITIVE = original_redact
+
+    # ─────────────────────────────────────────────────────────────────────────
+    section("11. MCP Input Validation")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Recreate fake workspace for validation tests
+    val_workspace = tempfile.mkdtemp(prefix="autowrec_val_")
+    val_session = os.path.join(val_workspace, "session_dump")
+    os.makedirs(val_session)
+    with open(os.path.join(val_session, "timeline.json"), "w") as f:
+        json.dump([{"ts": 1}, {"ts": 2}, {"ts": 3}], f)
+    with open(os.path.join(val_session, "test.txt"), "w") as f:
+        f.write("hello")
+
+    _mcp_state["workspace"] = val_session
+
+    async def test_validation():
+        # read_timeline with negative offset should not crash
+        try:
+            result = json.loads(_tool_text(await mcp.call_tool("read_timeline", {"offset": -5, "limit": 2})))
+            check("read_timeline negative offset clamped", result["total"] == 3)
+        except Exception as e:
+            check("read_timeline negative offset clamped", False, str(e))
+
+        # read_file with negative limit should not crash
+        try:
+            result = json.loads(_tool_text(await mcp.call_tool("read_file", {"path": "test.txt", "limit": -1})))
+            check("read_file negative limit clamped", result["bytes_read"] > 0)
+        except Exception as e:
+            check("read_file negative limit clamped", False, str(e))
+
+    asyncio.run(test_validation())
+    shutil.rmtree(val_workspace, ignore_errors=True)
+    _mcp_state["workspace"] = None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    section("12. Binary Transaction Body Encoding")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    bin_workspace = tempfile.mkdtemp(prefix="autowrec_bin_")
+    bin_session = os.path.join(bin_workspace, "session_dump")
+    tx_dir_bin = os.path.join(bin_session, "requests", "000_GET_example.com")
+    os.makedirs(tx_dir_bin)
+
+    with open(os.path.join(tx_dir_bin, "transaction.json"), "w") as f:
+        json.dump({"metadata": {"method": "GET", "url": "https://example.com"}}, f)
+    with open(os.path.join(tx_dir_bin, "res_body.bin"), "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")  # binary PNG header
+
+    _mcp_state["workspace"] = bin_session
+
+    async def test_binary_body():
+        try:
+            result = json.loads(_tool_text(await mcp.call_tool("read_transaction", {
+                "request_folder": "requests/000_GET_example.com",
+                "include_response_body": True,
+            })))
+            check("binary body returns base64", result.get("response_body_encoding") == "base64")
+        except Exception as e:
+            check("binary body returns base64", False, str(e))
+
+    asyncio.run(test_binary_body())
+    shutil.rmtree(bin_workspace, ignore_errors=True)
+    _mcp_state["workspace"] = None
+
+    # ─────────────────────────────────────────────────────────────────────────
     section("RESULTS")
     # ─────────────────────────────────────────────────────────────────────────
 

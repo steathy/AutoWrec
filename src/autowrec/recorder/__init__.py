@@ -116,7 +116,10 @@ def run_recording(
 
     try:
         if _video_recorder:
-            _video_recorder.start()
+            if not _video_recorder.start():
+                warn("Video recording unavailable — continuing without video.")
+                _video_recorder = None
+                temp_video_path = None
         session_data = asyncio.run(_browser_agent.run_session(url=url, on_browser_ready=_on_browser_ready))
     except Exception as exc:
         error(f"Recording session failed: {exc}")
