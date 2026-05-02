@@ -187,6 +187,11 @@ def merge_and_annotate_actions(
     full_video_path: str | None,
     video_start_unix: float | None,
 ) -> list[dict]:
+    """Merge action clusters and annotate with video clip paths.
+
+    NOTE: Mutates input — sorts the actions list in place and adds video
+    annotation keys (ai_video_file, video_start_sec, video_end_sec) to action dicts.
+    """
     if not actions:
         return actions
 
@@ -215,8 +220,6 @@ def merge_and_annotate_actions(
     if not has_video:
         return actions
 
-    recorder = ActionVideoRecorder(fps=config.FPS)
-
     _, _, clips_dir, _ = _get_paths()
     info(f"Splitting {len(merged_clips)} video action segments...")
     for idx, cluster in enumerate(merged_clips):
@@ -229,7 +232,7 @@ def merge_and_annotate_actions(
         clip_filename = f"action_clip_{idx:03d}.mp4"
         clip_path = os.path.join(clips_dir, clip_filename)
 
-        clip_ok = recorder.split_video(full_video_path, clip_path, clip_start, clip_end)
+        clip_ok = ActionVideoRecorder.split_video(full_video_path, clip_path, clip_start, clip_end)
         if clip_ok:
             for action in cluster:
                 action["ai_video_file"] = f"clips/{clip_filename}"

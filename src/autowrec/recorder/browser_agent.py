@@ -529,7 +529,7 @@ class BrowserAgent:
         pending = len(self.active_map)
         info(f"Waiting for {pending} pending request(s) to complete (timeout={timeout}s, idle={idle_time}s)...")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         start_time = loop.time()
         deadline = start_time + timeout
         last_change = loop.time()

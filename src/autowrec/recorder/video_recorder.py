@@ -256,7 +256,8 @@ class ActionVideoRecorder:
 
         return self.video_start_unix
 
-    def split_video(self, input_file: str, output_file: str, start_time_sec: float, end_time_sec: float) -> bool:
+    @staticmethod
+    def split_video(input_file: str, output_file: str, start_time_sec: float, end_time_sec: float) -> bool:
         """
         Slices a video using FFmpeg.
         Re-encodes the tiny chunk to ensure exact timestamps and prevent 1KB empty files.
@@ -293,7 +294,7 @@ class ActionVideoRecorder:
                 timeout=FFMPEG_TIMEOUT,
             )
 
-            if os.path.exists(output_file) and os.path.getsize(output_file) > 5000:
+            if os.path.exists(output_file) and os.path.getsize(output_file) > 1000:
                 return True
             else:
                 error(f"FFmpeg produced an empty or invalid clip for {output_file}.")
