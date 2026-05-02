@@ -365,6 +365,41 @@ def run_tests():
         cfg.BANNER_SPEED = saved_speed
     shutil.rmtree(bad_config_dir, ignore_errors=True)
 
+    # Test non-table sections and non-string output.dir
+    bad2_dir = tempfile.mkdtemp(prefix="autowrec_badcfg2_")
+    bad2_file = os.path.join(bad2_dir, "config.toml")
+    with open(bad2_file, "w") as f:
+        f.write('recording = 5\nbanner = "not a table"\n\n[output]\ndir = 42\n')
+
+    saved_output_dir = cfg.OUTPUT_DIR
+    try:
+        cfg.CONFIG_FILE = Path(bad2_file)
+        cfg.FPS = 3
+        cfg.OUTPUT_DIR = saved_output_dir
+        cfg._load_config_toml()
+        check("non-table section survives", True)
+        check("FPS unchanged by scalar section", cfg.FPS == 3, f"got {cfg.FPS}")
+        check("output.dir rejects int", cfg.OUTPUT_DIR == saved_output_dir, f"got {cfg.OUTPUT_DIR}")
+    except Exception as e:
+        check("non-table section survives", False, str(e))
+    finally:
+        cfg.CONFIG_FILE = saved_config_file
+        cfg.FPS = saved_fps
+        cfg.OUTPUT_DIR = saved_output_dir
+    shutil.rmtree(bad2_dir, ignore_errors=True)
+
+    # Test CLI timeout clamping
+    from types import SimpleNamespace
+    from autowrec.__main__ import _apply_config_overrides
+    saved_timeout = cfg.SANDBOX_TIMEOUT_SECONDS
+    fake_args = SimpleNamespace(output_dir=None, sandbox_timeout=0, no_banner=False, no_blocklist=False, redact=False, verbose=False)
+    _apply_config_overrides(fake_args)
+    check("CLI timeout=0 clamped to 1", cfg.SANDBOX_TIMEOUT_SECONDS == 1, f"got {cfg.SANDBOX_TIMEOUT_SECONDS}")
+    fake_args.sandbox_timeout = -10
+    _apply_config_overrides(fake_args)
+    check("CLI timeout=-10 clamped to 1", cfg.SANDBOX_TIMEOUT_SECONDS == 1, f"got {cfg.SANDBOX_TIMEOUT_SECONDS}")
+    cfg.SANDBOX_TIMEOUT_SECONDS = saved_timeout
+
     check("FPS range validation", cfg.FPS >= 1, f"got {cfg.FPS}")
     check("SEGMENT_PAD >= 0", cfg.SEGMENT_PAD_SECONDS >= 0)
     check("SANDBOX_TIMEOUT >= 1", cfg.SANDBOX_TIMEOUT_SECONDS >= 1)

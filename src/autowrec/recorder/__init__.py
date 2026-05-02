@@ -121,6 +121,11 @@ def run_recording(
             if not _video_recorder.start():
                 warn("Video recording unavailable — continuing without video.")
                 _video_recorder = None
+                if temp_video_path and os.path.exists(temp_video_path):
+                    try:
+                        os.unlink(temp_video_path)
+                    except OSError:
+                        pass
                 temp_video_path = None
         session_data = asyncio.run(_browser_agent.run_session(url=url, on_browser_ready=_on_browser_ready))
     except Exception as exc:
@@ -185,8 +190,8 @@ def run_recording(
         if temp_video_path and os.path.exists(temp_video_path):
             try:
                 os.unlink(temp_video_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                warn(f"Could not remove temp video file {temp_video_path}: {exc}")
 
         _browser_agent = None
         _video_recorder = None
