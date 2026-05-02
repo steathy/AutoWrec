@@ -372,6 +372,9 @@ def run_tests():
         f.write('recording = 5\nbanner = "not a table"\n\n[output]\ndir = 42\n')
 
     saved_output_dir = cfg.OUTPUT_DIR
+    saved_workspace_dir = cfg.WORKSPACE_DIR
+    saved_blocklist_dir = cfg.BLOCKLIST_DIR
+    saved_blocklist_db = cfg.BLOCKLIST_DB
     try:
         cfg.CONFIG_FILE = Path(bad2_file)
         cfg.FPS = 3
@@ -386,6 +389,9 @@ def run_tests():
         cfg.CONFIG_FILE = saved_config_file
         cfg.FPS = saved_fps
         cfg.OUTPUT_DIR = saved_output_dir
+        cfg.WORKSPACE_DIR = saved_workspace_dir
+        cfg.BLOCKLIST_DIR = saved_blocklist_dir
+        cfg.BLOCKLIST_DB = saved_blocklist_db
     shutil.rmtree(bad2_dir, ignore_errors=True)
 
     # Test CLI timeout clamping
@@ -471,6 +477,13 @@ def run_tests():
             check("read_file negative limit clamped", result["bytes_read"] > 0)
         except Exception as e:
             check("read_file negative limit clamped", False, str(e))
+
+        # execute_code with timeout=0 should clamp to 1 and not crash
+        try:
+            result = _tool_text(await mcp.call_tool("execute_code", {"code": "print(1+1)", "timeout": 0}))
+            check("execute_code timeout=0 clamped", "2" in result)
+        except Exception as e:
+            check("execute_code timeout=0 clamped", False, str(e))
 
     asyncio.run(test_validation())
     shutil.rmtree(val_workspace, ignore_errors=True)
