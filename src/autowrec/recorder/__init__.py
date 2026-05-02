@@ -197,11 +197,6 @@ def run_recording(
             except Exception as exc:
                 warn(f"Failed to close blocklist DB: {exc}")
 
-        try:
-            signal.signal(signal.SIGINT, prev_handler)
-        except (OSError, ValueError):
-            pass
-
         if temp_video_path and os.path.exists(temp_video_path):
             try:
                 os.unlink(temp_video_path)

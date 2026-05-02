@@ -128,7 +128,7 @@ class BrowserAgent:
                 log_exception()
 
     async def request_handler(self, event: cdp.network.RequestWillBeSent):
-        if event.wall_time:
+        if event.wall_time is not None:
             self.ts_converter.calibrate(event.timestamp, event.wall_time)
 
         if event.request_id in self.active_map:
@@ -377,22 +377,22 @@ class BrowserAgent:
         if target_info.type_ == "page":
             info(f"New Tab/Window Opened: {target_info.url}")
 
-            # Wait a tiny moment for zendriver to internally register the new tab
-            await asyncio.sleep(0.5)
-
-            # Find the actual Tab object zendriver created for this session
+            # Poll for zendriver to register the new tab (up to 3s)
             tab_session = None
-            for t in self.browser.targets:
-                # Some zendriver versions expose .session_id, others expose .target_id
-                if (
-                    getattr(t, "session_id", None) == event.session_id
-                    or getattr(t, "target_id", None) == target_info.target_id
-                ):
-                    tab_session = t
+            for _ in range(30):
+                await asyncio.sleep(0.1)
+                for t in self.browser.targets:
+                    if (
+                        getattr(t, "session_id", None) == event.session_id
+                        or getattr(t, "target_id", None) == target_info.target_id
+                    ):
+                        tab_session = t
+                        break
+                if tab_session:
                     break
 
             if not tab_session:
-                warn(f"Could not resolve Tab object for session {event.session_id}")
+                warn(f"Could not resolve Tab object for session {event.session_id} within 3s")
                 return
 
             info(f"Successfully bound CDP to new tab: {target_info.target_id}")

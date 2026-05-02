@@ -190,7 +190,7 @@ def _build_server():
                 }
 
         if include_request_body:
-            req_files = [f for f in os.listdir(folder_path) if f.startswith("req_payload")]
+            req_files = sorted(f for f in os.listdir(folder_path) if f.startswith("req_payload"))
             if req_files:
                 body = _read_body(os.path.join(folder_path, req_files[0]), max_body_size)
                 result["request_body"] = body["content"]
@@ -199,7 +199,7 @@ def _build_server():
                     result["request_body_encoding"] = body["encoding"]
 
         if include_response_body:
-            res_files = [f for f in os.listdir(folder_path) if f.startswith("res_body")]
+            res_files = sorted(f for f in os.listdir(folder_path) if f.startswith("res_body"))
             if res_files:
                 body = _read_body(os.path.join(folder_path, res_files[0]), max_body_size)
                 result["response_body"] = body["content"]

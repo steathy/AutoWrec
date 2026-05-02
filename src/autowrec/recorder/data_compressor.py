@@ -12,14 +12,20 @@ from .video_recorder import ActionVideoRecorder
 
 try:
     from magika import Magika
-
-    magika_detector = Magika()
     MAGIKA_AVAILABLE = True
-    info("Magika AI detector initialized successfully.")
 except ImportError:
-    magika_detector = None
+    Magika = None
     MAGIKA_AVAILABLE = False
-    warn("Magika not installed. Skipping advanced content type detection.")
+
+_magika_detector = None
+
+
+def _get_magika():
+    global _magika_detector
+    if _magika_detector is None and MAGIKA_AVAILABLE:
+        _magika_detector = Magika()
+        info("Magika AI detector initialized successfully.")
+    return _magika_detector
 
 def _get_paths():
     """Derive workspace paths from current config (not cached at import time)."""
@@ -37,7 +43,7 @@ def make_serializable(obj):
     if isinstance(obj, str | int | float | bool | type(None)):
         return obj
     if isinstance(obj, bytes):
-        return ""
+        return {"__bytes_b64__": base64.b64encode(obj).decode("ascii")}
     if isinstance(obj, list):
         return [make_serializable(x) for x in obj]
     if isinstance(obj, dict):
@@ -61,6 +67,24 @@ def _redact_headers(headers: dict) -> dict:
         else:
             redacted[k] = v
     return redacted
+
+
+def _redact_cookie_details(details):
+    """Redact cookie values in structured CDP cookie lists/dicts when REDACT_SENSITIVE is on."""
+    if not config.REDACT_SENSITIVE:
+        return details
+    if isinstance(details, list):
+        for entry in details:
+            cookie = entry.get("cookie") if isinstance(entry, dict) else None
+            if isinstance(cookie, dict) and "value" in cookie:
+                cookie["value"] = f"[REDACTED — {len(str(cookie['value']))} chars]"
+    elif isinstance(details, dict):
+        for key in ("blocked", "exempted"):
+            for entry in details.get(key, []):
+                cookie = entry.get("cookie") if isinstance(entry, dict) else None
+                if isinstance(cookie, dict) and "value" in cookie:
+                    cookie["value"] = f"[REDACTED — {len(str(cookie['value']))} chars]"
+    return details
 
 
 def get_header_val(headers, key):
@@ -105,7 +129,8 @@ def extract_cookies_set(item):
 
 
 def detect_content_type(content, is_base64=False):
-    if content is None or not MAGIKA_AVAILABLE or magika_detector is None:
+    detector = _get_magika()
+    if content is None or not MAGIKA_AVAILABLE or detector is None:
         return None
     try:
         if is_base64:
@@ -116,7 +141,7 @@ def detect_content_type(content, is_base64=False):
             byte_content = content
         else:
             return None
-        result = magika_detector.identify_bytes(byte_content[:262144])
+        result = detector.identify_bytes(byte_content[:262144])
         return {
             "label": result.output.label,
             "mime_type": result.output.mime_type,
@@ -242,7 +267,8 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
 
             declared_mime = res_data.get("mime_type", "unknown")
             detected_mime = response_detection.get("mime_type", "unknown") if response_detection else "unknown"
-            if declared_mime != detected_mime and declared_mime != "unknown":
+            if (declared_mime != detected_mime and declared_mime != "unknown"
+                    and not (response_detection and "error" in response_detection)):
                 detection_stats["mismatches"] += 1
 
             transaction_data = {
@@ -267,14 +293,14 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
                 "request": {
                     "headers": req_headers,
                     "cookies_sent": extract_cookies_sent(item),
-                    "cookies_sent_detailed": item.get("cookies_sent_details", []),
+                    "cookies_sent_detailed": _redact_cookie_details(item.get("cookies_sent_details", [])),
                     "content_detection": request_detection,
                     "has_payload": bool(item.get("post_data")),
                 },
                 "response": {
                     "headers": res_headers,
                     "cookies_set": extract_cookies_set(item),
-                    "cookies_set_detailed": item.get("cookies_received_details", {}),
+                    "cookies_set_detailed": _redact_cookie_details(item.get("cookies_received_details", {})),
                     "content_detection": response_detection,
                     "has_body": bool(res_data.get("body")),
                     "mime_mismatch": declared_mime != detected_mime
@@ -283,7 +309,7 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
                 },
             }
 
-            with open(os.path.join(req_root, "transaction.json"), "w") as f:
+            with open(os.path.join(req_root, "transaction.json"), "w", encoding="utf-8") as f:
                 json.dump(make_serializable(transaction_data), f, indent=2)
 
             if item.get("post_data"):
@@ -389,7 +415,7 @@ def compile_workspace(
             timeline_events.extend(network_events)
 
         timeline_events.sort(key=lambda x: x["timestamp"])
-        with open(os.path.join(OUTPUT_DIR, "timeline.json"), "w") as f:
+        with open(os.path.join(OUTPUT_DIR, "timeline.json"), "w", encoding="utf-8") as f:
             json.dump(make_serializable(timeline_events), f, indent=2)
 
         session_flow = []
@@ -429,7 +455,7 @@ def compile_workspace(
                 summary["statistics"]["domains"][domain] = summary["statistics"]["domains"].get(domain, 0) + 1
 
             status = req.get("response_data", {}).get("status") if req.get("response_data") else None
-            if status:
+            if status is not None:
                 summary["statistics"]["status_codes"][str(status)] = (
                     summary["statistics"]["status_codes"].get(str(status), 0) + 1
                 )
@@ -438,10 +464,10 @@ def compile_workspace(
             if req.get("cookies_sent_details"):
                 summary["statistics"]["with_cookies"] += 1
 
-        with open(os.path.join(OUTPUT_DIR, "SUMMARY.json"), "w") as f:
+        with open(os.path.join(OUTPUT_DIR, "SUMMARY.json"), "w", encoding="utf-8") as f:
             json.dump(make_serializable(summary), f, indent=2)
 
-        with open(os.path.join(OUTPUT_DIR, "session_metadata.json"), "w") as f:
+        with open(os.path.join(OUTPUT_DIR, "session_metadata.json"), "w", encoding="utf-8") as f:
             json.dump(make_serializable(metadata), f, indent=2)
 
         success(f"Workspace compiled successfully at {OUTPUT_DIR}")

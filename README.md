@@ -204,7 +204,7 @@ tests/
 - **Zero LLM dependencies** — no API keys, no litellm, no instructor. The host AI provides all intelligence.
 - **Path traversal protection** — all file access tools validate paths stay within the workspace.
 - **Stderr-safe console** — all Rich output redirected to stderr in MCP mode so stdout remains clean for JSON-RPC.
-- **Persistent Python environment** — IPython state (variables, imports) persists across `execute_code` calls. Runs with local user permissions.
+- **Persistent Python environment** — IPython state (variables, imports) persists across `execute_code` calls. Runs with local user permissions. On Windows, the PATH is jailed to bundled binaries (`rg`, `jq`, `sd`); system commands like `pip` and `git` are not available inside `execute_code`.
 - **Ad/tracker filtering** — SQLite-backed domain blocklist with LRU cache filters noise from captured traffic. Toggleable via config or `--no-blocklist`.
 - **Opt-in redaction** — `--redact` flag or config to sanitize passwords, auth headers, and cookies in captures. Off by default for throwaway-account testing.
 

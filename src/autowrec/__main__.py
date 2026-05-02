@@ -68,7 +68,7 @@ def _apply_config_overrides(args):
     if getattr(args, "output_dir", None):
         from pathlib import Path
 
-        config.OUTPUT_DIR = Path(args.output_dir)
+        config.OUTPUT_DIR = Path(args.output_dir).resolve()
         config.WORKSPACE_DIR = config.OUTPUT_DIR / "workspace"
         config.BLOCKLIST_DIR = config.OUTPUT_DIR / "blocklist"
         config.BLOCKLIST_DB = config.OUTPUT_DIR / "blocklist.db"
@@ -158,6 +158,7 @@ def _print_rich_help():
     t4.add_column(style="bold", min_width=24)
     t4.add_column()
     t4.add_row("--output-dir PATH", "Root directory for all output (default: ./output)")
+    t4.add_row("--sandbox-timeout SEC", "Timeout for IPython code execution (default: 60)")
     t4.add_row("--no-banner", "Skip the startup animation")
     t4.add_row("--no-blocklist", "Disable ad/tracker domain filtering")
     t4.add_row("--redact", "Redact passwords, auth headers, and cookies")

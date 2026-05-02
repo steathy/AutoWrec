@@ -45,7 +45,7 @@ def _reverse_domain(domain: str) -> str:
     This lets us use SQLite's `LIKE 'com.google.%'` or `BETWEEN` to match
     all subdomains of google.com in a single indexed query.
     """
-    return ".".join(reversed(domain.lower().strip(".").split(".")))
+    return ".".join(reversed([p for p in domain.lower().strip(".").split(".") if p]))
 
 
 def _extract_domain(url: str) -> str:

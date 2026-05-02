@@ -10,6 +10,7 @@ from .utils import format_output, hard_kill_process, interrupt_process, parse_of
 from .worker import ipython_worker
 
 logger = logging.getLogger(__name__)
+_ANSI_ESCAPE_RE = re.compile(r"(?:\x1B[@-_]|[\x80-\x9F])[0-?]*[ -/]*[@-~]")
 
 
 class AgentSandbox:
@@ -210,7 +211,7 @@ class AgentSandbox:
         if timeout_msg:
             out = out + timeout_msg if out else timeout_msg.strip()
 
-        out = re.compile(r"(?:\x1B[@-_]|[\x80-\x9F])[0-?]*[ -/]*[@-~]").sub("", out)
+        out = _ANSI_ESCAPE_RE.sub("", out)
         self.output_cache[cell_id] = out
 
         formatted_out = format_output(out, cell_id) if out else ""
