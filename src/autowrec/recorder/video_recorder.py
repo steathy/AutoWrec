@@ -153,6 +153,7 @@ class ActionVideoRecorder:
                     "width": monitor["width"], "height": monitor["height"],
                 }
                 chrome_locked = False
+                resize_warned = False
 
                 frame_duration = 1.0 / self.fps
                 bounds_check_interval = 2.0
@@ -213,9 +214,11 @@ class ActionVideoRecorder:
                                     or new_bounds["top"] != capture_region["top"]):
                                 capture_region["left"] = new_bounds["left"]
                                 capture_region["top"] = new_bounds["top"]
-                            if (abs(new_bounds["width"] - capture_region["width"]) > 10
+                            if not resize_warned and (
+                                    abs(new_bounds["width"] - capture_region["width"]) > 10
                                     or abs(new_bounds["height"] - capture_region["height"]) > 10):
                                 warn("Chrome window resized during recording — video may be cropped or padded.")
+                                resize_warned = True
                         last_bounds_check = loop_start
 
                     screenshot = sct.grab(capture_region)

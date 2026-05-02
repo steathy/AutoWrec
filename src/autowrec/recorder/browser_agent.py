@@ -381,6 +381,8 @@ class BrowserAgent:
             tab_session = None
             for _ in range(30):
                 await asyncio.sleep(0.1)
+                if not self.recording_active or not self.browser or self.browser.stopped:
+                    return
                 for t in self.browser.targets:
                     if (
                         getattr(t, "session_id", None) == event.session_id

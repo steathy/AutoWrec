@@ -70,7 +70,10 @@ def _redact_headers(headers: dict) -> dict:
 
 
 def _redact_cookie_details(details):
-    """Redact cookie values in structured CDP cookie lists/dicts when REDACT_SENSITIVE is on."""
+    """Redact cookie values in structured CDP cookie lists/dicts when REDACT_SENSITIVE is on.
+
+    NOTE: Mutates the input in place for efficiency. Caller should not reuse the original data.
+    """
     if not config.REDACT_SENSITIVE:
         return details
     if isinstance(details, list):
@@ -303,9 +306,10 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
                     "cookies_set_detailed": _redact_cookie_details(item.get("cookies_received_details", {})),
                     "content_detection": response_detection,
                     "has_body": bool(res_data.get("body")),
-                    "mime_mismatch": declared_mime != detected_mime
-                    if (response_detection and declared_mime != "unknown")
-                    else False,
+                    "mime_mismatch": (
+                        declared_mime != detected_mime
+                        and not (response_detection and "error" in response_detection)
+                    ) if (response_detection and declared_mime != "unknown") else False,
                 },
             }
 
