@@ -31,8 +31,6 @@ def _handle_sigint(signum, frame):
     info("Ctrl+C detected. Shutting down recorder...")
     if _browser_agent:
         _browser_agent.stop()
-    if _video_recorder:
-        _video_recorder.stop()
 
 
 def _init_blocklist() -> BlocklistDB | None:

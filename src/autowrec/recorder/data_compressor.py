@@ -270,8 +270,13 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
 
             declared_mime = res_data.get("mime_type", "unknown")
             detected_mime = response_detection.get("mime_type", "unknown") if response_detection else "unknown"
-            if (declared_mime != detected_mime and declared_mime != "unknown"
-                    and not (response_detection and "error" in response_detection)):
+            has_mime_mismatch = (
+                bool(response_detection)
+                and declared_mime != "unknown"
+                and declared_mime != detected_mime
+                and "error" not in response_detection
+            )
+            if has_mime_mismatch:
                 detection_stats["mismatches"] += 1
 
             transaction_data = {
@@ -306,10 +311,7 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
                     "cookies_set_detailed": _redact_cookie_details(item.get("cookies_received_details", {})),
                     "content_detection": response_detection,
                     "has_body": bool(res_data.get("body")),
-                    "mime_mismatch": (
-                        declared_mime != detected_mime
-                        and not (response_detection and "error" in response_detection)
-                    ) if (response_detection and declared_mime != "unknown") else False,
+                    "mime_mismatch": has_mime_mismatch,
                 },
             }
 
@@ -325,7 +327,7 @@ def process_network_requests(requests: list[dict]) -> tuple[list[dict], dict]:
                 save_content(
                     os.path.join(req_root, f"res_body.{ext}"), res_data["body"], res_data.get("base64_encoded", False)
                 )
-                res_data.pop("body", None)
+                res_data.pop("body", None)  # Free memory after saving to disk
 
             timeline_requests.append(
                 {
