@@ -242,19 +242,36 @@ def _build_server():
                     "truncated": size > max_size,
                 }
 
+        def _pick_body_file(folder, prefix, detection):
+            """Pick the body file matching the detected extension.
+            Falls back to alphabetic-first if there's no detection metadata."""
+            candidates = sorted(f for f in os.listdir(folder) if f.startswith(prefix))
+            if not candidates:
+                return None
+            if detection and isinstance(detection, dict):
+                ext = detection.get("extension")
+                if ext:
+                    for c in candidates:
+                        if c.endswith(f".{ext}"):
+                            return c
+            return candidates[0]
+
+        req_detection = (result.get("request") or {}).get("content_detection")
+        res_detection = (result.get("response") or {}).get("content_detection")
+
         if include_request_body:
-            req_files = sorted(f for f in os.listdir(folder_path) if f.startswith("req_payload"))
-            if req_files:
-                body = _read_body(os.path.join(folder_path, req_files[0]), max_body_size)
+            chosen = _pick_body_file(folder_path, "req_payload", req_detection)
+            if chosen:
+                body = _read_body(os.path.join(folder_path, chosen), max_body_size)
                 result["request_body"] = body["content"]
                 result["request_body_truncated"] = body["truncated"]
                 if "encoding" in body:
                     result["request_body_encoding"] = body["encoding"]
 
         if include_response_body:
-            res_files = sorted(f for f in os.listdir(folder_path) if f.startswith("res_body"))
-            if res_files:
-                body = _read_body(os.path.join(folder_path, res_files[0]), max_body_size)
+            chosen = _pick_body_file(folder_path, "res_body", res_detection)
+            if chosen:
+                body = _read_body(os.path.join(folder_path, chosen), max_body_size)
                 result["response_body"] = body["content"]
                 result["response_body_truncated"] = body["truncated"]
                 if "encoding" in body:
@@ -368,8 +385,17 @@ def _build_server():
         if duration <= 0:
             duration = 5.0
 
-        step = duration / num_frames
-        timestamps = [max(0, min(duration - 0.1, step * i + step / 2)) for i in range(num_frames)]
+        # For very short clips, sampling N timestamps with a fixed end_pad
+        # collapses everything to 0 (B2). Fall back to a single mid-clip
+        # sample, and otherwise spread evenly inside a small end-pad.
+        if duration < 0.5 or num_frames == 1:
+            timestamps = [duration / 2]
+        else:
+            end_pad = min(0.05, duration * 0.02)
+            span = max(duration - 2 * end_pad, 0.001)
+            timestamps = [
+                end_pad + span * (i + 0.5) / num_frames for i in range(num_frames)
+            ]
 
         frames = []
         for t in timestamps:

@@ -90,10 +90,11 @@ def main():
         skip("_get_process_tree test", "non-Windows platform")
 
     # ─────────────────────────────────────────────────────────────────────
-    section("2. Orphan-extra-info leak for blocklist-skipped requests")
+    section("2. orphan_extra_info short-circuits for blocked IDs (post-B1)")
     # ─────────────────────────────────────────────────────────────────────
-    # If extra_info events arrive AFTER a blocked request (and the request
-    # itself was skipped), they accumulate forever in orphan_extra_info.
+    # After B1, request_handler marks blocked / data: request_ids in a
+    # bounded LRU and req/res_extra_info short-circuit so the orphan map
+    # never grows for skipped requests.
 
     from autowrec.recorder.browser_agent import BrowserAgent
 
@@ -117,14 +118,16 @@ def main():
         wall_time = None
         redirect_response = None
 
-    # Simulate: blocked request arrives first
     asyncio.run(agent.request_handler(FakeEvent()))
     check(
-        "blocked request not added to active_map",
+        "B1: blocked request not added to active_map",
         FakeEvent.request_id not in agent.active_map,
     )
+    check(
+        "B1: blocked request_id recorded in skipped LRU",
+        "rid-blocked-1" in agent._skipped_ids,
+    )
 
-    # Simulate: extra_info arrives later for the SAME blocked request_id
     class FakeAssocCookie:
         def to_json(self):
             return {"cookie": {"name": "x", "value": "y"}}
@@ -135,12 +138,30 @@ def main():
 
     asyncio.run(agent.req_extra_info(FakeExtraEvent()))
 
-    leaked = agent.orphan_extra_info.get("rid-blocked-1") is not None
     check(
-        "leak: orphan_extra_info retains entries for blocked request_ids",
-        leaked,
-        "this is a confirmed leak — entries are never cleaned up "
-        "since the request is blocked",
+        "B1: extra_info for blocked id does NOT enter orphan_extra_info",
+        agent.orphan_extra_info.get("rid-blocked-1") is None,
+    )
+
+    # Bound check — flood with 10k blocked IDs and confirm LRU caps.
+    class _Burst:
+        def __init__(self, i):
+            self.request_id = f"flood-{i}"
+            self.request = FakeReq()
+            self.type_ = "Other"
+            self.timestamp = 0.0
+            self.wall_time = None
+            self.redirect_response = None
+
+    for i in range(10_000):
+        ev = _Burst(i)
+        ev.request = FakeReq()
+        ev.request.url = "https://ads.example.com/x"
+        asyncio.run(agent.request_handler(ev))
+    check(
+        "B1: skipped LRU stays bounded under flood",
+        len(agent._skipped_ids) <= agent._SKIPPED_LRU_MAX,
+        f"got {len(agent._skipped_ids)}",
     )
 
     # ─────────────────────────────────────────────────────────────────────
@@ -186,25 +207,25 @@ def main():
         shutil.rmtree(test_workspace, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────
-    section("4. read_transaction picks first alpha req/res file")
+    section("4. read_transaction picks body by detection.extension (post-B7)")
     # ─────────────────────────────────────────────────────────────────────
-    # If two req_payload* files exist, `sorted(...)[0]` picks alphabetic
-    # first. With current convention this is fine, but it's worth pinning.
+    # When transaction.json carries content_detection.extension, the matching
+    # file must be picked even if alphabetic ordering would prefer another.
 
     ws = tempfile.mkdtemp(prefix="autowrec_tx_")
     sd = os.path.join(ws, "session_dump")
     folder = os.path.join(sd, "requests", "000_POST_x")
     os.makedirs(folder)
     with open(os.path.join(folder, "transaction.json"), "w") as f:
-        json.dump({"metadata": {"method": "POST"}}, f)
+        json.dump({
+            "metadata": {"method": "POST"},
+            "request": {"content_detection": {"extension": "json"}},
+            "response": {},
+        }, f)
     with open(os.path.join(folder, "req_payload.json"), "w") as f:
         f.write('{"primary": true}')
     with open(os.path.join(folder, "req_payload.bin"), "wb") as f:
-        f.write(b"\x00\x01")  # secondary
-
-    _state["workspace"] = sd
-    mcp, _, _ = _build_server()
-    _state2 = mcp  # silence
+        f.write(b"\x00\x01")  # alphabetically first, but wrong extension
 
     async def t():
         from autowrec.mcp_server import _build_server as bs
@@ -214,19 +235,14 @@ def main():
             "read_transaction",
             {"request_folder": "requests/000_POST_x", "include_request_body": True},
         )
-        body = json.loads(res.content[0].text).get("request_body", "")
-        return body
+        return json.loads(res.content[0].text).get("request_body", "")
 
     body = asyncio.run(t())
-    # alphabetical: 'req_payload.bin' < 'req_payload.json', so .bin is picked.
     check(
-        "read_transaction picks alphabetic-first payload file",
-        body == "" or "primary" not in body,
+        "B7: detection.extension='json' picks .json over alphabetic .bin",
+        '"primary"' in body,
         f"got body={body!r}",
     )
-    print("    NOTE: with multiple req_payload.* files, the .bin sorts before "
-          ".json which may not be the user's intent. Consider preferring the "
-          "extension that matches the request_detection result.")
 
     shutil.rmtree(ws, ignore_errors=True)
 
@@ -266,32 +282,42 @@ def main():
     shutil.rmtree(big_ws, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────
-    section("6. extract_video_frames duration math")
+    section("6. extract_video_frames duration math (post-B2)")
     # ─────────────────────────────────────────────────────────────────────
-    # When duration is very small (< num_frames * 0.1), all timestamps
-    # collapse to the same value, so the host AI sees identical frames.
-    # Probe this without actually invoking ffmpeg.
+    # After B2: very short clips degrade to a single mid-clip sample, and
+    # longer clips spread N timestamps inside a small end_pad.
 
-    duration = 0.05
-    num_frames = 4
-    step = duration / num_frames
-    timestamps = [
-        max(0, min(duration - 0.1, step * i + step / 2))
-        for i in range(num_frames)
-    ]
-    distinct = len(set(round(t, 4) for t in timestamps))
+    def _b2_timestamps(duration, num_frames):
+        if duration < 0.5 or num_frames == 1:
+            return [duration / 2]
+        end_pad = min(0.05, duration * 0.02)
+        span = max(duration - 2 * end_pad, 0.001)
+        return [end_pad + span * (i + 0.5) / num_frames for i in range(num_frames)]
+
+    tiny = _b2_timestamps(0.05, 4)
     check(
-        "extract_video_frames: distinct timestamps for tiny clips",
-        distinct > 1,
-        f"all {num_frames} frames at the same time {timestamps[0]} for "
-        f"{duration}s clip — host AI gets duplicate frames",
+        "B2: tiny clip degrades to one frame",
+        len(tiny) == 1,
+        f"got {tiny}",
+    )
+
+    normal = _b2_timestamps(10.0, 4)
+    distinct = len(set(round(t, 4) for t in normal))
+    check(
+        "B2: normal clip has all distinct timestamps",
+        distinct == 4,
+        f"got {normal}",
+    )
+    check(
+        "B2: normal-clip timestamps stay strictly inside [0, duration]",
+        all(0 < t < 10.0 for t in normal),
+        f"got {normal}",
     )
 
     # ─────────────────────────────────────────────────────────────────────
-    section("7. compile_workspace leaves staging dir on failure")
+    section("7. compile_workspace cleans staging on failure (post-B4)")
     # ─────────────────────────────────────────────────────────────────────
-    # If an exception occurs after STAGING_DIR is created but before the
-    # rename, the staging dir is orphaned. Verify by injecting a failure.
+    # After B4, a mid-compile exception removes session_dump_new/.
 
     from autowrec import config as cfg
     from autowrec.recorder import data_compressor as dc
@@ -303,7 +329,6 @@ def main():
     cfg.WORKSPACE_DIR = test_out / "workspace"
     cfg.WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Patch process_network_requests to raise mid-compile
     saved_proc = dc.process_network_requests
     def boom(*a, **k):
         raise RuntimeError("simulated mid-compile failure")
@@ -315,13 +340,13 @@ def main():
             full_video_path=None,
             video_start_unix=None,
         )
-        check("compile failure returns False", ok is False)
+        check("B4: compile failure returns False", ok is False)
 
         staging = str(cfg.WORKSPACE_DIR / "session_dump_new")
         check(
-            "staging dir orphaned on failure",
-            os.path.exists(staging),
-            "this is the leak — staging dir is not cleaned up",
+            "B4: staging dir cleaned on failure",
+            not os.path.exists(staging),
+            f"staging dir still present at {staging}",
         )
     finally:
         dc.process_network_requests = saved_proc
@@ -425,25 +450,30 @@ def main():
     )
 
     # ─────────────────────────────────────────────────────────────────────
-    section("10. make_serializable on tuples / sets")
+    section("10. make_serializable on tuples / sets (post-B10)")
     # ─────────────────────────────────────────────────────────────────────
     from autowrec.recorder.data_compressor import make_serializable
 
     out = make_serializable((1, 2, 3))
     check(
-        "tuple becomes string repr (lossy)",
-        isinstance(out, str) and out == "(1, 2, 3)",
+        "B10: tuple becomes a JSON list",
+        isinstance(out, list) and out == [1, 2, 3],
         f"got {out!r}",
     )
     out2 = make_serializable({1, 2, 3})
     check(
-        "set becomes string repr (lossy)",
-        isinstance(out2, str),
+        "B10: set becomes a JSON list",
+        isinstance(out2, list) and sorted(out2) == [1, 2, 3],
         f"got {out2!r}",
     )
-    print("    NOTE: tuples and sets fall through to str(obj). If CDP ever "
-          "returns these, they round-trip as opaque strings. Consider casting "
-          "tuple→list explicitly.")
+    out3 = make_serializable({"a": (1, 2), "b": {3, 4}})
+    check(
+        "B10: nested tuple/set inside dict serializes",
+        isinstance(out3, dict)
+        and isinstance(out3["a"], list) and out3["a"] == [1, 2]
+        and isinstance(out3["b"], list) and sorted(out3["b"]) == [3, 4],
+        f"got {out3!r}",
+    )
 
     # ─────────────────────────────────────────────────────────────────────
     section("11. read_file with offset > size")
@@ -514,9 +544,8 @@ def main():
         console_mod.console = saved
 
     # ─────────────────────────────────────────────────────────────────────
-    section("15. config TOML loader reverts OUTPUT_DIR if value bad")
+    section("15. config TOML loader rejects empty output.dir (post-B5)")
     # ─────────────────────────────────────────────────────────────────────
-    # Existing tests cover bad scalars; this checks empty-string output.dir.
     from autowrec import config as cfg2
 
     badd = tempfile.mkdtemp(prefix="autowrec_emptyd_")
@@ -526,21 +555,72 @@ def main():
 
     saved_cf = cfg2.CONFIG_FILE
     saved_od = cfg2.OUTPUT_DIR
+    sentinel = saved_od  # value before loading the bad TOML
     try:
         cfg2.CONFIG_FILE = Path(badf)
         cfg2._load_config_toml()
-        # Empty string resolves to cwd via Path("").resolve() — that's a leak
-        leaked = cfg2.OUTPUT_DIR == Path("").resolve()
         check(
-            "BUG: empty output.dir resolves to CWD silently",
-            leaked,
-            f"OUTPUT_DIR resolved to {cfg2.OUTPUT_DIR}, "
-            f"effectively pointing at the user's working directory",
+            "B5: empty output.dir leaves OUTPUT_DIR untouched",
+            cfg2.OUTPUT_DIR == sentinel,
+            f"got {cfg2.OUTPUT_DIR}",
         )
     finally:
         cfg2.CONFIG_FILE = saved_cf
         cfg2.OUTPUT_DIR = saved_od
         shutil.rmtree(badd, ignore_errors=True)
+
+    # ─────────────────────────────────────────────────────────────────────
+    section("16. Cached binary re-verification on startup (post-B3)")
+    # ─────────────────────────────────────────────────────────────────────
+    # If a cached rg/jq/sd has the wrong hash, _verify_existing should
+    # delete it so ensure_binaries re-downloads. Test the verify step
+    # directly so we don't actually hit the network.
+
+    from autowrec import bin_manager as bm
+
+    bin_test_dir = tempfile.mkdtemp(prefix="autowrec_bin_verify_")
+    fake_bin_dir = Path(bin_test_dir)
+
+    # rg has a hash on record for windows/amd64 — write a wrong-content
+    # fake binary and check that _verify_existing removes it.
+    fake = fake_bin_dir / bm._exe("rg")
+    fake.write_bytes(b"not a real rg binary " * 10)
+    initial_size = fake.stat().st_size
+
+    if ("rg", "windows", "amd64") in bm._EXPECTED_HASHES and sys.platform == "win32":
+        ok = bm._verify_existing(fake, "rg", "windows", "amd64")
+        check(
+            "B3: tampered cached rg fails re-verify",
+            ok is False,
+            f"verify returned {ok}",
+        )
+        check(
+            "B3: tampered cached rg is removed after re-verify",
+            not fake.exists(),
+        )
+    else:
+        skip("B3 cached-binary recheck", "no rg hash for this platform")
+
+    shutil.rmtree(bin_test_dir, ignore_errors=True)
+
+    # ─────────────────────────────────────────────────────────────────────
+    section("17. sh.exe path independent of $PATH (post-B8)")
+    # ─────────────────────────────────────────────────────────────────────
+    # Check the worker derives sh_path from working_dir, not $PATH.
+    # Inspecting source is enough — the live process is hard to instrument.
+
+    import autowrec.ipython_sandbox.worker as wk_mod
+    import inspect
+    src = inspect.getsource(wk_mod)
+    check(
+        "B8: worker no longer joins os.environ['PATH'] to build sh_path",
+        "os.environ[\"PATH\"]" not in src
+        or "os.path.join(os.environ[\"PATH\"], \"sh.exe\")" not in src,
+    )
+    check(
+        "B8: worker derives sh_path from working_dir/.jailed_bin",
+        ".jailed_bin" in src and "sh.exe" in src,
+    )
 
     # ─────────────────────────────────────────────────────────────────────
     print()

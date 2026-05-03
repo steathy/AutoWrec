@@ -40,11 +40,11 @@ def sanitize_filename(name: str) -> str:
 
 
 def make_serializable(obj):
-    if isinstance(obj, str | int | float | bool | type(None)):
+    if isinstance(obj, (str, int, float, bool, type(None))):
         return obj
     if isinstance(obj, bytes):
         return {"__bytes_b64__": base64.b64encode(obj).decode("ascii")}
-    if isinstance(obj, list):
+    if isinstance(obj, (list, tuple, set, frozenset)):
         return [make_serializable(x) for x in obj]
     if isinstance(obj, dict):
         return {k: make_serializable(v) for k, v in obj.items()}
@@ -517,4 +517,7 @@ def compile_workspace(
     except Exception as e:
         error(f"Workspace compilation failed: {e}")
         print_exception()
+        # Don't leave an orphaned staging directory behind on failure.
+        if os.path.exists(STAGING_DIR):
+            shutil.rmtree(STAGING_DIR, ignore_errors=True)
         return False

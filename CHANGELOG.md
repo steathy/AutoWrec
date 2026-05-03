@@ -32,6 +32,49 @@ regression suite that surfaced these defects).
   `_get_workspace` raises a clear "Last recording failed: ..." error if
   the most recent attempt errored without producing a workspace.
 
+### Fixed
+
+- **B1: Orphan-extra-info leak for blocked / data: URI requests.** When
+  a request was skipped (data: URI or blocklist hit), subsequent
+  `RequestWillBeSentExtraInfo` / `ResponseReceivedExtraInfo` events
+  arriving for the same request_id accumulated forever in
+  `orphan_extra_info` because they would never be flushed by a tracked
+  request. Skipped IDs are now recorded in a 4096-entry LRU; the extra-
+  info handlers short-circuit and the orphan map stays bounded under
+  load (verified with a 10k-event flood test).
+- **B2: `extract_video_frames` returned duplicate frames for short
+  clips.** With `duration < num_frames * 0.1`, every timestamp clamped
+  to 0, sending the host AI N base64 copies of the same frame. Tiny
+  clips now degrade to a single mid-clip sample; longer clips spread N
+  timestamps inside a small end-pad strictly within `(0, duration)`.
+- **B3: Cached sandbox binaries were not re-verified on subsequent
+  startups.** A binary that became corrupted or was tampered with
+  after the first install would be used forever without complaint.
+  `_ensure_rg/jq/sd` now re-verify `rg/jq/sd` against `_EXPECTED_HASHES`
+  on every startup; busybox is matched against any known variant hash;
+  mismatched files are deleted and re-downloaded.
+- **B4: `compile_workspace` orphaned `session_dump_new/` on failure.**
+  A mid-compile exception left the staging directory behind; across
+  failed runs these accumulated. The failure path now removes the
+  staging dir before returning False.
+- **B5: Empty `output.dir = ""` resolved to user CWD.** Blank /
+  whitespace-only strings now log a warning and keep the default
+  output path; only non-empty strings are accepted.
+- **B7: `read_transaction` picked the alphabetically-first body file.**
+  When more than one `req_payload.*` or `res_body.*` file is present,
+  the file matching `request.content_detection.extension` (or
+  `response.content_detection.extension`) is preferred; alphabetic-
+  first remains the fallback.
+- **B8: `worker.py` derived `sh.exe` from `os.environ["PATH"]`.** This
+  only worked because `apply_path_jail` overwrote PATH to a single
+  entry; any future change adding a second entry would silently produce
+  an invalid path. Now derived from `working_dir/.jailed_bin/sh.exe`.
+- **B9:** Removed dead `old_req.pop("_meta", None)` from the redirect
+  path — `_meta` was never set anywhere.
+- **B10: `make_serializable` rendered tuples / sets / frozensets as
+  opaque strings.** Now mapped to JSON lists alongside `list`. Future
+  CDP shape changes won't silently round-trip as `"(1, 2, 3)"`.
+
 ---
 
 ## [1.2.0] - 2026-05-02

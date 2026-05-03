@@ -1,5 +1,6 @@
 import multiprocessing
 import os
+import shutil
 import sys
 import threading
 
@@ -133,7 +134,14 @@ def ipython_worker(
 
         from IPython.utils.text import SList
 
-        sh_path = os.path.join(os.environ["PATH"], "sh.exe")
+        # Derive sh.exe from the jailed bin dir directly. Using $PATH only
+        # works when apply_path_jail has rewritten PATH to a single entry —
+        # any future change that prepends to PATH would silently break this.
+        sh_path = os.path.join(working_dir, ".jailed_bin", "sh.exe")
+        if not os.path.exists(sh_path):
+            fallback = shutil.which("busybox")
+            if fallback:
+                sh_path = fallback
 
         def busybox_system(cmd):
             """Handles standard interactive shell commands: !ls"""

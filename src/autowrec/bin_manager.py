@@ -264,11 +264,42 @@ def _extract_binary_from_archive(archive_path: Path, binary_name: str, dest: Pat
 # ── Per-tool ensure functions ────────────────────────────────────────────────
 
 
+def _verify_existing(dest: Path, tool_name: str, os_name: str, arch: str) -> bool:
+    """Re-verify a cached binary's hash. Removes the file on mismatch.
+
+    Returns True if the binary is valid (or no hash on record), False if it
+    was deleted. Allows callers to re-download instead of trusting tampered
+    cached files.
+    """
+    if not dest.exists():
+        return False
+    if (tool_name, os_name, arch) not in _EXPECTED_HASHES:
+        # No hash on record — keep silent to avoid log spam on every startup.
+        return True
+    if _verify_binary(dest, tool_name, os_name, arch):
+        return True
+    warn(f"Cached {tool_name} failed re-verification — re-downloading.")
+    return False
+
+
+def _verify_existing_busybox(dest: Path) -> bool:
+    """Re-verify a cached busybox variant. We don't know which variant was
+    downloaded, so try every known hash; if any match, accept."""
+    if not dest.exists() or not _BUSYBOX_HASHES:
+        return dest.exists()
+    actual = hashlib.sha256(dest.read_bytes()).hexdigest()
+    if actual in _BUSYBOX_HASHES.values():
+        return True
+    warn("Cached busybox failed re-verification — re-downloading.")
+    dest.unlink(missing_ok=True)
+    return False
+
+
 def _ensure_busybox(bin_dir: Path, os_name: str, arch: str):
     if os_name != "windows":
         return
     dest = bin_dir / "busybox.exe"
-    if dest.exists():
+    if dest.exists() and _verify_existing_busybox(dest):
         return
     if shutil.which("busybox"):
         return
@@ -281,7 +312,7 @@ def _ensure_busybox(bin_dir: Path, os_name: str, arch: str):
 
 def _ensure_rg(bin_dir: Path, os_name: str, arch: str):
     dest = bin_dir / _exe("rg")
-    if dest.exists():
+    if dest.exists() and _verify_existing(dest, "rg", os_name, arch):
         return
     if shutil.which("rg"):
         return
@@ -299,7 +330,7 @@ def _ensure_rg(bin_dir: Path, os_name: str, arch: str):
 
 def _ensure_jq(bin_dir: Path, os_name: str, arch: str):
     dest = bin_dir / _exe("jq")
-    if dest.exists():
+    if dest.exists() and _verify_existing(dest, "jq", os_name, arch):
         return
     if shutil.which("jq"):
         return
@@ -315,7 +346,7 @@ def _ensure_jq(bin_dir: Path, os_name: str, arch: str):
 
 def _ensure_sd(bin_dir: Path, os_name: str, arch: str):
     dest = bin_dir / _exe("sd")
-    if dest.exists():
+    if dest.exists() and _verify_existing(dest, "sd", os_name, arch):
         return
     if shutil.which("sd"):
         return

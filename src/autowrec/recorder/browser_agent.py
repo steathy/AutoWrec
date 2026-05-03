@@ -4,6 +4,7 @@ import json
 import os
 import time
 import uuid
+from collections import OrderedDict
 from datetime import UTC, datetime
 
 import zendriver as zd
@@ -62,6 +63,11 @@ class BrowserAgent:
         self.orphan_extra_info = {}
         self._streamed_bodies: dict[str, list[bytes]] = {}  # request_id -> list of raw chunks
         self._request_tab: dict = {}  # request_id -> tab session for correct CDP calls
+        # Bounded LRU of request_ids we've decided to skip (data: URIs, blocklist
+        # hits). Lets req_extra_info / res_extra_info short-circuit so they don't
+        # accumulate orphaned entries for requests that will never be tracked.
+        self._skipped_ids: OrderedDict[str, None] = OrderedDict()
+        self._SKIPPED_LRU_MAX = 4096
         self.stats = {
             "total_requests": 0,
             "actionable_requests": 0,
@@ -79,6 +85,15 @@ class BrowserAgent:
         }
 
         self.telemetry_script = ""
+
+    def _mark_skipped(self, request_id) -> None:
+        """Record that *request_id* was filtered out, and drop any orphaned
+        extra-info we might have already buffered for it."""
+        rid = str(request_id)
+        self._skipped_ids[rid] = None
+        if len(self._skipped_ids) > self._SKIPPED_LRU_MAX:
+            self._skipped_ids.popitem(last=False)
+        self.orphan_extra_info.pop(request_id, None)
 
     def _load_scripts(self) -> bool:
         """Loads the injected JavaScript files from disk."""
@@ -139,7 +154,6 @@ class BrowserAgent:
                 old_req["request_state"] = "redirected"
                 old_req["redirect_target"] = event.request.url
                 self.stats["redirected"] += 1
-            old_req.pop("_meta", None)
 
         unique_id = f"{event.request_id}_{uuid.uuid4().hex[:8]}"
 
@@ -173,11 +187,13 @@ class BrowserAgent:
 
         # Skip data: URIs (base64-encoded inline resources) — they add noise, not useful context
         if event.request.url.startswith("data:"):
+            self._mark_skipped(event.request_id)
             return
 
         # Skip domains on the blocklist (ads, trackers, telemetry)
         if self.blocklist and self.blocklist.is_blocked_url(event.request.url):
             self.stats["blocked_by_blocklist"] += 1
+            self._mark_skipped(event.request_id)
             return
 
         self.captured_requests.append(request_obj)
@@ -347,6 +363,8 @@ class BrowserAgent:
             warn(f"Request failed: {req['url'][:60]} - {event.error_text}")
 
     async def req_extra_info(self, event: cdp.network.RequestWillBeSentExtraInfo):
+        if str(event.request_id) in self._skipped_ids:
+            return
         cookies = [ac.to_json() for ac in event.associated_cookies]
         if event.request_id in self.active_map:
             self.active_map[event.request_id]["cookies_sent_details"] = cookies
@@ -356,6 +374,8 @@ class BrowserAgent:
             self.orphan_extra_info[event.request_id]["sent"] = cookies
 
     async def res_extra_info(self, event: cdp.network.ResponseReceivedExtraInfo):
+        if str(event.request_id) in self._skipped_ids:
+            return
         cookie_data = {
             "blocked": [c.to_json() for c in event.blocked_cookies],
             "exempted": [c.to_json() for c in (event.exempted_cookies or [])],
