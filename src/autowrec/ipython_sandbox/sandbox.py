@@ -122,6 +122,35 @@ class AgentSandbox:
         with self._execute_lock:
             return self._execute_impl(code, custom_timeout, is_restore)
 
+    def _read_for_cell(self, cell_id: str, timeout: float) -> dict:
+        """Read from result_queue until we get a response tagged with cell_id.
+
+        Drops responses tagged with anything else (e.g. a stale PONG from a
+        prior start_process whose ping wait timed out — its PONG arrives in
+        result_queue *after* the next cell's command was sent and would
+        otherwise be eaten as if it were that cell's answer). Cancel takes
+        priority — any response received under a cancel flag is returned
+        as-is so the cancel handling logic can run.
+
+        Raises queue.Empty if the timeout elapses with no matching response.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise queue.Empty
+            candidate = self.result_queue.get(timeout=remaining)
+            if self._cancel_flag.is_set():
+                return candidate
+            if candidate.get("cell_id") == cell_id:
+                return candidate
+            logger.debug(
+                "Discarding stale response while waiting for %s: cell_id=%r ret_val=%r",
+                cell_id,
+                candidate.get("cell_id"),
+                candidate.get("ret_val"),
+            )
+
     def _execute_impl(self, code: str, custom_timeout: int | None = None, is_restore: bool = False) -> str:
         self._wait_ready()
         magic_res = self.handle_magic_commands(code)
@@ -136,11 +165,14 @@ class AgentSandbox:
         if not is_restore:
             logger.debug(f"Code payload:\n{code}")
 
+        # Drain any pending messages before sending. The cell_id-aware read
+        # below would discard them anyway, but draining up-front is cheaper
+        # than waiting for them to time out one-by-one.
         if self.process and self.process.is_alive():
-            while not self.result_queue.empty():
+            while True:
                 try:
                     self.result_queue.get_nowait()
-                except Exception:
+                except (queue.Empty, Exception):
                     break
 
         with open(self.output_file, "w", encoding="utf-8") as f:
@@ -153,7 +185,7 @@ class AgentSandbox:
         fatal_timeout, timeout_msg = False, ""
 
         try:
-            res = self.result_queue.get(timeout=timeout)
+            res = self._read_for_cell(cell_id, timeout)
 
             # If cancel() flagged a cancel, check if the worker's result is a
             # KeyboardInterrupt (softkill success) vs something else
@@ -178,7 +210,7 @@ class AgentSandbox:
                 logger.warning(f"Soft Timeout ({timeout}s) reached for {cell_id}. Sending interrupt...")
                 interrupt_process(self.process, self.interrupt_event)
                 try:
-                    res = self.result_queue.get(timeout=1.5)
+                    res = self._read_for_cell(cell_id, 1.5)
                     if self._cancel_flag.is_set() or self.process is not original_process:
                         status, code_exit, ret_val = "error", 1, "CancelledByUser"
                     else:

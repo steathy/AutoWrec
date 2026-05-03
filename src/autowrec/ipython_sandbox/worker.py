@@ -110,10 +110,17 @@ def ipython_worker(
         os.setpgrp()
         signal.signal(signal.SIGINT, signal.default_int_handler)
 
+    # All result_queue.put sites tag their response with the cell_id of the
+    # command being answered (Fix B). Lets the consumer drop stale responses
+    # — e.g. a PONG that arrives after start_process's ping wait expired and
+    # would otherwise be eaten by the next execute_code call.
+    def _emit(rid, status, code, val):
+        result_queue.put({"cell_id": rid, "status": status, "exit_code": code, "ret_val": val})
+
     try:
         os.chdir(os.path.realpath(working_dir))
     except Exception as e:
-        result_queue.put({"status": "crash", "exit_code": 1, "ret_val": f"Failed to enter directory: {e}"})
+        _emit("__BOOT__", "crash", 1, f"Failed to enter directory: {e}")
         return
 
     if bin_path and os.path.exists(bin_path):
@@ -173,10 +180,13 @@ def ipython_worker(
     shell.displayhook.write_format_data = lambda *args, **kwargs: None
 
     while True:
+        # Default sentinel in case command_queue.get itself is interrupted
+        # before yielding a cell_id.
+        cell_id = "__UNKNOWN__"
         try:
             cell_id, command = command_queue.get()
             if cell_id == "__PING__":
-                result_queue.put({"status": "success", "exit_code": 0, "ret_val": "PONG"})
+                _emit("__PING__", "success", 0, "PONG")
                 continue
 
             with open(output_file, "a", encoding="utf-8", buffering=1) as f:
@@ -214,16 +224,15 @@ def ipython_worker(
             elif result.result is not None:
                 ret_val = str(result.result)
 
-            result_queue.put(
-                {
-                    "status": "error" if result.error_in_exec else "success",
-                    "exit_code": 1 if result.error_in_exec else 0,
-                    "ret_val": ret_val,
-                }
+            _emit(
+                cell_id,
+                "error" if result.error_in_exec else "success",
+                1 if result.error_in_exec else 0,
+                ret_val,
             )
 
         except KeyboardInterrupt:
-            result_queue.put({"status": "error", "exit_code": 1, "ret_val": "KeyboardInterrupt"})
+            _emit(cell_id, "error", 1, "KeyboardInterrupt")
 
         except BaseException as e:
-            result_queue.put({"status": "crash", "exit_code": 1, "ret_val": f"Shell Error: {str(e)}"})
+            _emit(cell_id, "crash", 1, f"Shell Error: {str(e)}")

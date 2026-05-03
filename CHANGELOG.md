@@ -6,6 +6,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased] — 1.3.1
+
+Targeted follow-up to v1.3.0 addressing the "MCP needs 3 calls to wake
+up" report after a `/mcp` reconnect.
+
+### Fixed
+
+- **Sandbox cold-start race that ate the AI's first `execute_code` and
+  fed back a stale `PONG` on the second.** Two distinct issues
+  (described in [the v1.2 review thread](#)) were combining:
+  - On a slow IPython cold-start, `start_process`'s 15 s ping wait
+    expired, then `_ready` was set anyway. The first `execute_code`'s
+    60 s budget then had to absorb the remaining kernel-boot time.
+  - The `PONG` response from that ping eventually arrived in the
+    `result_queue` *after* the next `execute_code` had already sent
+    its command, and was consumed as if it were that cell's answer.
+    The cell's actual response sat in the queue until the cell after
+    it drained the queue.
+
+  Fix: every response from the worker now carries the `cell_id` of the
+  command being answered. The sandbox reader drops responses tagged
+  with anything other than the cell currently awaiting an answer, so
+  late-arriving `PONG`s and other control messages can never corrupt
+  cell results. (Plan ref: Fix B.)
+
+### Changed
+
+- **MCP server pre-warms the IPython sandbox in a daemon thread.**
+  `run_mcp_server` now spawns a background thread that triggers
+  `_get_sandbox()` immediately after `_build_server()` returns,
+  shifting the binary-download / process-spawn / IPython-import cost
+  into the dead time between MCP connect and the AI's first
+  `execute_code` call. The stdio handshake is **not** blocked — the
+  warmup runs in parallel with `mcp.run`, so Claude Code's MCP connect
+  timeout is unaffected. Also added a lock around `_get_sandbox` so
+  the warmup thread and a racing first `execute_code` don't both spawn
+  worker subprocesses. (Plan ref: Fix A — async variant.)
+
+---
+
 ## [1.3.0] — 2026-05-03
 
 Bug-fix and MCP-token-efficiency release driven by the v1.2 post-release

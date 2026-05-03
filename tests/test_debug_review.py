@@ -990,6 +990,68 @@ def main():
     )
 
     # ─────────────────────────────────────────────────────────────────────
+    section("S. Sandbox stale-response race + warmup (post-A+B)")
+    # ─────────────────────────────────────────────────────────────────────
+    # B: every response from the worker carries cell_id; the sandbox reader
+    #    drops responses tagged with anything other than the cell currently
+    #    awaiting an answer. Verifies the stale-PONG-eats-Cell_2 race is gone.
+    # A: pre-warm thread at MCP server boot doesn't block stdio.
+
+    from autowrec.ipython_sandbox.sandbox import AgentSandbox
+
+    sb_dir = tempfile.mkdtemp(prefix="autowrec_stale_")
+    sb = AgentSandbox(working_dir=sb_dir, timeout_seconds=15)
+    # Drive a basic execute through to confirm the worker boots cleanly under
+    # the new tagging protocol.
+    res = sb.execute("print('first cell')")
+    check("A+B: first cell on real worker runs", "first cell" in res)
+
+    # Now simulate the buggy race: pretend a stale response with an
+    # unrelated cell_id was buffered before the next execute call.
+    sb.result_queue.put({
+        "cell_id": "__PING__",
+        "status": "success",
+        "exit_code": 0,
+        "ret_val": "PONG",
+    })
+    res2 = sb.execute("print('second cell')")
+    check(
+        "B: stale PONG with foreign cell_id is discarded, not returned",
+        "second cell" in res2 and "PONG" not in res2,
+        f"got: {res2[:120]!r}",
+    )
+
+    # And a stale message with a *past* Cell_N id (e.g. Cell_2 actually
+    # arrived after we'd already gotten a Cell_2-shaped response).
+    sb.result_queue.put({
+        "cell_id": "Cell_99",  # not what we'll ask for
+        "status": "success",
+        "exit_code": 0,
+        "ret_val": "STALE",
+    })
+    res3 = sb.execute("print('third cell')")
+    check(
+        "B: stale Cell_N response with non-matching id is discarded",
+        "third cell" in res3 and "STALE" not in res3,
+        f"got: {res3[:120]!r}",
+    )
+
+    sb.close()
+    shutil.rmtree(sb_dir, ignore_errors=True)
+
+    # A: verify the warmup hook is wired through _state and is callable.
+    from autowrec.mcp_server import _build_server
+    _, st_a, _ = _build_server()
+    check(
+        "A: _state['_get_sandbox'] exposes the sandbox factory",
+        callable(st_a.get("_get_sandbox")),
+    )
+    check(
+        "A: warmup hook does not eagerly create sandbox at build time",
+        st_a.get("sandbox") is None,
+    )
+
+    # ─────────────────────────────────────────────────────────────────────
     section("17. sh.exe path independent of $PATH (post-B8)")
     # ─────────────────────────────────────────────────────────────────────
     # Check the worker derives sh_path from working_dir, not $PATH.

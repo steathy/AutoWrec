@@ -43,6 +43,11 @@ def _build_server():
     )
 
     _state = {"sandbox": None, "workspace": None, "recording_thread": None, "recording_error": None}
+    # Guards _get_sandbox so the optional warmup thread (Fix A) and an
+    # AI-triggered first execute_code can't both create the AgentSandbox
+    # concurrently — that would spawn two worker subprocesses, leak one,
+    # and clobber the other.
+    _sandbox_lock = threading.Lock()
 
     def _get_workspace() -> str:
         from . import config
@@ -73,18 +78,23 @@ def _build_server():
     def _get_sandbox():
         from . import config
 
+        # Double-checked locking: the fast path avoids the lock cost on every
+        # execute_code call, while still serializing creation between the
+        # warmup thread and the first AI-triggered call.
         if _state["sandbox"] is None:
-            from .bin_manager import ensure_binaries
-            from .ipython_sandbox import AgentSandbox
+            with _sandbox_lock:
+                if _state["sandbox"] is None:
+                    from .bin_manager import ensure_binaries
+                    from .ipython_sandbox import AgentSandbox
 
-            bin_path = ensure_binaries()
-            workspace = str(config.WORKSPACE_DIR)
-            os.makedirs(workspace, exist_ok=True)
-            _state["sandbox"] = AgentSandbox(
-                working_dir=workspace,
-                timeout_seconds=config.SANDBOX_TIMEOUT_SECONDS,
-                bin_path=str(bin_path),
-            )
+                    bin_path = ensure_binaries()
+                    workspace = str(config.WORKSPACE_DIR)
+                    os.makedirs(workspace, exist_ok=True)
+                    _state["sandbox"] = AgentSandbox(
+                        working_dir=workspace,
+                        timeout_seconds=config.SANDBOX_TIMEOUT_SECONDS,
+                        bin_path=str(bin_path),
+                    )
         return _state["sandbox"]
 
     def _safe_resolve(base: str, relative: str) -> str:
@@ -522,6 +532,11 @@ def _build_server():
             kwargs["custom_timeout"] = max(1, timeout)
         return sandbox.execute(code, **kwargs)
 
+    # Expose the sandbox factory via _state so external callers (notably the
+    # warmup thread in run_mcp_server) can trigger creation without changing
+    # _build_server's return signature, which is consumed by several tests.
+    _state["_get_sandbox"] = _get_sandbox
+
     return mcp, _state, _safe_resolve
 
 
@@ -549,7 +564,25 @@ def run_mcp_server():
 
     config.ensure_output_dirs()
 
-    mcp, _, _ = _build_server()
+    mcp, _state, _ = _build_server()
+
+    # Pre-warm the IPython sandbox in a daemon thread (Fix A). Shifts the
+    # cold-start cost (binary downloads + multiprocessing spawn + IPython
+    # import) into the dead time between MCP connect and the AI's first
+    # execute_code call, instead of charging it to that call's 60s budget.
+    # MUST be backgrounded — synchronous warmup would block the stdio
+    # handshake and trip Claude Code's MCP connect timeout.
+    def _prewarm_sandbox():
+        try:
+            _state["_get_sandbox"]()
+        except Exception:
+            # Warmup is best-effort — the first execute_code call will
+            # retry via _get_sandbox and surface any error there.
+            from .console import log_exception
+            log_exception()
+
+    threading.Thread(target=_prewarm_sandbox, daemon=True).start()
+
     mcp.run(transport="stdio")
 
 
