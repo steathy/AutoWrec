@@ -6,11 +6,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [Unreleased] — 1.3.0
+## [1.3.0] — 2026-05-03
 
-In progress. Bug-fix and MCP-token-efficiency release driven by the v1.2
-post-release code review (see `tests/test_debug_review.py` for the
-regression suite that surfaced these defects).
+Bug-fix and MCP-token-efficiency release driven by the v1.2 post-release
+code review (see `tests/test_debug_review.py` for the regression suite
+that surfaced these defects). Two **breaking** MCP-tool API changes
+(`read_transaction`, `read_file`); see "Changed (MCP tools — breaking)"
+below for migration notes.
 
 ### Fixed (Critical)
 

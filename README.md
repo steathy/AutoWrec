@@ -1,4 +1,4 @@
-# AutoWrec v1.2
+# AutoWrec v1.3
 
 A browser session recorder that captures network traffic, user actions, and screen video — then exposes everything as tools for AI coding assistants.
 
@@ -77,25 +77,27 @@ Add to your project's `.mcp.json` or global `~/.claude.json`:
 
 After adding the config, restart Claude Code. You should see `autowrec` listed when you run `/mcp` in Claude Code. The AI tool now has access to 9 tools:
 
-| Tool | Purpose |
-|------|---------|
-| `record_session` | Launch browser and start recording (non-blocking) |
-| `check_recording` | Poll whether the recording is still running or finished |
-| `read_session_summary` | Session metadata, action flow, statistics |
-| `read_timeline` | Paginated interleaved user actions + network requests |
-| `read_transaction` | HTTP transaction details (headers, cookies, bodies) |
-| `list_workspace_files` | Browse the workspace directory |
-| `read_file` | Read any file with byte-level pagination |
-| `extract_video_frames` | Get base64 JPEG frames from video clips |
-| `execute_code` | Run Python in a persistent IPython environment |
+| Tool | Purpose | Key parameters |
+|------|---------|----------------|
+| `record_session` | Launch browser and start recording (non-blocking) | `url`, `enable_video` |
+| `check_recording` | Poll whether the recording is still running or finished | — |
+| `read_session_summary` | Lean session digest by default | `verbose=true` for full SUMMARY.json |
+| `read_timeline` | Paginated time-sorted user actions + network requests | `offset`, `limit`, `summary=false` for full events |
+| `read_transaction` | HTTP transaction metadata (headers, cookies; **never** body content) | `level=minimal\|headers\|full` |
+| `list_workspace_files` | Browse the workspace directory | `subdirectory`, `include_sizes=true` |
+| `read_file` | Read a workspace file | `mode=stat\|head\|raw`, `offset`, `limit` (raw only) |
+| `extract_video_frames` | Get base64 JPEG frames from video clips | `num_frames`, `quality=low\|med\|high` |
+| `execute_code` | Run Python in a persistent IPython environment | `code`, `timeout` |
+
+> **v1.3 note:** `read_transaction` no longer inlines body content. To read a request payload or response body, call `read_file` on `<request_folder>/req_payload.<ext>` or `<request_folder>/res_body.<ext>` — the extension is in `request.content_detection.extension` (visible at `level=full`).
 
 #### Example MCP Workflow
 
 Once connected, ask the AI tool to:
 
 1. **Record**: "Use autowrec to record a session on https://example.com" — Chrome opens, you browse, close the browser to stop.
-2. **Explore**: "Read the session summary" — the AI calls `read_session_summary` and reviews what was captured.
-3. **Drill down**: "Show me the login POST request" — the AI uses `read_timeline` to find it, then `read_transaction` for headers/body.
+2. **Explore**: "Read the session summary" — the AI calls `read_session_summary` (lean digest by default) and reviews counts + top domains.
+3. **Drill down**: "Show me the login POST request" — the AI uses `read_timeline` (compact summary) to find it, calls `read_transaction` for metadata, then `read_file` for the request payload.
 4. **Build**: "Write a Python script that automates this login" — the AI uses `execute_code` to prototype against the live site.
 
 ### As a Standalone CLI
@@ -176,7 +178,7 @@ Runs a standalone test suite covering imports, config validation, MCP tools, pat
 
 ```
 src/autowrec/
-├── mcp_server.py          # FastMCP server (8 tools over stdio)
+├── mcp_server.py          # FastMCP server (9 tools over stdio)
 ├── config.py              # Global configuration + TOML loader
 ├── console.py             # Rich terminal output
 ├── bin_manager.py         # Downloads rg, jq, sd for execution environment

@@ -125,6 +125,9 @@ def extract_cookies_set(item):
     headers = resp.get("headers") or {}
     raw = get_header_val(headers, "set-cookie")
     if raw:
+        # CDP folds multiple Set-Cookie headers into one '\n'-separated string,
+        # so splitting on \n recovers the individual cookies. (Standard HTTP
+        # would use a list of headers; CDP joins them.)
         for line in raw.split("\n"):
             if "=" in line:
                 names.add(line.split("=")[0].strip())
