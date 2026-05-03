@@ -6,10 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [Unreleased] — 1.3.1
+## [1.3.1] — 2026-05-03
 
 Targeted follow-up to v1.3.0 addressing the "MCP needs 3 calls to wake
 up" report after a `/mcp` reconnect.
+
+### Added
+
+- **Server version in MCP `initialize` handshake.** `FastMCP(version=…)`
+  is now wired to `config.VERSION`, so MCP clients (e.g. Claude Code's
+  `/mcp` listing) can show the AutoWrec version directly from the
+  protocol-level `serverInfo` without us paying tool-list token
+  overhead for a custom `get_version` tool.
 
 ### Fixed
 

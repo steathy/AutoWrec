@@ -31,10 +31,15 @@ def _build_server():
     FastMCP dispatches tools via thread pool executors.
     """
     from fastmcp import FastMCP
+    from . import config
     from .recorder import run_recording as _run_recording
 
     mcp = FastMCP(
         name="autowrec",
+        # Surfaces in the MCP `initialize` handshake's serverInfo, so clients
+        # like Claude Code's /mcp listing can show the version without us
+        # spending tokens on a get_version tool.
+        version=config.VERSION,
         instructions=(
             "Record a browser session with record_session, poll check_recording, "
             "then explore via read_session_summary / read_timeline / read_transaction. "
