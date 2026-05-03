@@ -17,6 +17,7 @@ import base64
 import json
 import os
 import subprocess
+import threading
 from typing import Annotated
 
 
@@ -24,10 +25,13 @@ def _build_server():
     """Construct the MCP server with all tools registered.
 
     Returns (mcp, state, _safe_resolve) for testing.
-    Heavy imports (fastmcp, rich) happen here — the module itself
-    only imports stdlib.
+    Heavy imports (fastmcp, recorder) happen here — the module itself
+    only imports stdlib. The recorder import MUST happen at build time,
+    not inside tool functions, to avoid import-lock deadlocks when
+    FastMCP dispatches tools via thread pool executors.
     """
     from fastmcp import FastMCP
+    from .recorder import run_recording as _run_recording
 
     mcp = FastMCP(
         name="autowrec",
@@ -40,7 +44,7 @@ def _build_server():
         ),
     )
 
-    _state = {"sandbox": None, "workspace": None}
+    _state = {"sandbox": None, "workspace": None, "recording_thread": None, "recording_error": None}
 
     def _get_workspace() -> str:
         from . import config
@@ -94,26 +98,60 @@ def _build_server():
 
         AI analysis is NOT performed — you (the host AI) analyze the data yourself.
 
-        Returns the absolute path to the compiled session_dump directory.
+        Returns immediately after launching Chrome. The recording runs in the
+        background. Call check_recording to poll status, or just wait for the
+        user to close the browser and then call read_session_summary.
         """
         from . import config
-        from .recorder import run_recording
+
+        if _state["recording_thread"] and _state["recording_thread"].is_alive():
+            return "A recording is already in progress. Close the browser to finish it, or call check_recording for status."
 
         if enable_video is None:
             enable_video = config.MCP_VIDEO_ENABLED
 
         config.ensure_output_dirs()
 
-        result = run_recording(
-            url=url,
-            enable_video=enable_video,
+        _state["recording_error"] = None
+
+        def _run_in_background():
+            try:
+                result = _run_recording(url=url, enable_video=enable_video)
+                if result:
+                    _state["workspace"] = result
+                else:
+                    _state["recording_error"] = "Recording failed or produced no output."
+            except Exception as exc:
+                _state["recording_error"] = str(exc)
+
+        thread = threading.Thread(target=_run_in_background, daemon=True)
+        thread.start()
+        _state["recording_thread"] = thread
+
+        return (
+            f"Recording started. Chrome is launching and navigating to {url}.\n"
+            "The user can now browse freely. When done, they should close the browser.\n"
+            "Call check_recording to poll status, then use read_session_summary to explore the data."
         )
 
-        if not result:
-            raise RuntimeError("Recording failed or produced no output.")
-
-        _state["workspace"] = result
-        return f"Recording complete. Workspace: {result}"
+    @mcp.tool()
+    def check_recording() -> str:
+        """Check whether a background recording session is still running or has finished.
+        Call this after record_session to know when the user has closed the browser
+        and the workspace is ready for exploration.
+        """
+        thread = _state.get("recording_thread")
+        if thread is None:
+            return "No recording has been started. Call record_session first."
+        if thread.is_alive():
+            return "Recording is still in progress. The user is browsing. Wait for them to close the browser."
+        err = _state.get("recording_error")
+        if err:
+            return f"Recording finished with an error: {err}"
+        ws = _state.get("workspace")
+        if ws:
+            return f"Recording complete. Workspace ready at: {ws}"
+        return "Recording finished but no workspace was produced."
 
     @mcp.tool()
     def read_session_summary() -> str:
@@ -379,15 +417,19 @@ def run_mcp_server():
     the module can be loaded with near-zero overhead. This is critical for
     uvx/MCP startup time — Claude Code has a ~10s connection timeout.
     """
+    import io
     import sys
 
     from . import config
     from . import console as console_module
     from rich.console import Console
 
-    # Redirect ALL Rich output to stderr — stdout is the MCP JSON-RPC transport
+    # Redirect ALL Rich output to stderr — stdout is the MCP JSON-RPC transport.
+    # Wrap stderr in a UTF-8 TextIOWrapper to prevent UnicodeEncodeError from
+    # Rich's box-drawing characters on Windows legacy consoles (cp1252).
+    stderr_utf8 = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
     console_module.console = Console(
-        theme=console_module._theme, highlight=False, file=sys.stderr
+        theme=console_module._theme, highlight=False, file=stderr_utf8
     )
 
     config.ensure_output_dirs()

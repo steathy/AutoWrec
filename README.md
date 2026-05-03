@@ -1,4 +1,4 @@
-# AutoWrec v1.1
+# AutoWrec v1.2
 
 A browser session recorder that captures network traffic, user actions, and screen video — then exposes everything as tools for AI coding assistants.
 
@@ -75,11 +75,12 @@ Add to your project's `.mcp.json` or global `~/.claude.json`:
 
 #### Verify the MCP Server
 
-After adding the config, restart Claude Code. You should see `autowrec` listed when you run `/mcp` in Claude Code. The AI tool now has access to 8 tools:
+After adding the config, restart Claude Code. You should see `autowrec` listed when you run `/mcp` in Claude Code. The AI tool now has access to 9 tools:
 
 | Tool | Purpose |
 |------|---------|
-| `record_session` | Launch browser, capture session, compile workspace |
+| `record_session` | Launch browser and start recording (non-blocking) |
+| `check_recording` | Poll whether the recording is still running or finished |
 | `read_session_summary` | Session metadata, action flow, statistics |
 | `read_timeline` | Paginated interleaved user actions + network requests |
 | `read_transaction` | HTTP transaction details (headers, cookies, bodies) |

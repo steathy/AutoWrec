@@ -90,7 +90,7 @@ def run_tests():
 
     from autowrec import config
 
-    check("VERSION is set", config.VERSION == "1.1.0")
+    check("VERSION is set", config.VERSION == "1.2.0")
     check("FPS default", config.FPS == 3)
     check("SEGMENT_PAD_SECONDS default", config.SEGMENT_PAD_SECONDS == 2)
     check("SANDBOX_TIMEOUT_SECONDS default", config.SANDBOX_TIMEOUT_SECONDS == 60)
@@ -111,8 +111,9 @@ def run_tests():
     async def test_tools():
         tools = await mcp.list_tools()
         tool_names = {t.name for t in tools}
-        check("8 tools registered", len(tools) == 8, f"got {len(tools)}")
+        check("9 tools registered", len(tools) == 9, f"got {len(tools)}")
         check("record_session tool", "record_session" in tool_names)
+        check("check_recording tool", "check_recording" in tool_names)
         check("read_session_summary tool", "read_session_summary" in tool_names)
         check("read_timeline tool", "read_timeline" in tool_names)
         check("read_transaction tool", "read_transaction" in tool_names)

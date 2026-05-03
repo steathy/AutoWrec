@@ -439,12 +439,18 @@ class BrowserAgent:
                 warn(f"Failed to initialise CDP on new tab {target_info.target_id}: {exc}")
                 log_exception()
 
+    async def _bring_browser_to_front(self) -> None:
+        """Bring Chrome to foreground via CDP."""
+        try:
+            await self.tab.send(cdp.page.bring_to_front())
+        except Exception:
+            pass
+
     async def run_session(self, url: str, on_browser_ready=None) -> dict:
         if not self._load_scripts():
             return {}
 
         try:
-            info("Starting Zendriver Browser...")
             self.browser = await zd.start(headless=False, browser_args=["--incognito", "--disable-popup-blocking"])
             self.recording_start = datetime.now(UTC)
             self.recording_active = True
@@ -488,6 +494,8 @@ class BrowserAgent:
 
             info(f"Navigating to {url}")
             await self.tab.send(cdp.page.navigate(url=url))
+
+            await self._bring_browser_to_front()
 
             while self.recording_active:
                 if self.browser and (self.browser.stopped or self.browser.connection.closed):

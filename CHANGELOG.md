@@ -6,6 +6,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.2.0] - 2026-05-02
+
+Critical MCP server fix. The `record_session` tool was completely non-functional — Chrome never launched due to a Python import-lock deadlock.
+
+### Added
+
+- **`check_recording` MCP tool** — polls whether a background recording is still running or has finished. Call after `record_session` to know when the workspace is ready.
+
+### Changed
+
+- **`record_session` is now non-blocking** — launches Chrome in a background thread and returns immediately. The AI uses `check_recording` to poll for completion instead of blocking the MCP transport.
+- **Recorder import moved to server build time** — the heavy import chain (zendriver, mss, numpy, magika) now runs during `_build_server()` at MCP server startup, not inside tool functions. This prevents import-lock deadlocks when FastMCP dispatches tools via thread pool executors.
+- **MCP server stderr wrapped in UTF-8** — prevents `UnicodeEncodeError` from Rich box-drawing characters on Windows legacy consoles (cp1252). Without this, `rule()` and other Rich output crashed before Chrome could launch.
+
+### Fixed
+
+- **Import-lock deadlock in MCP mode** — `record_session` previously used a lazy `from .recorder import run_recording` inside a background thread. This deadlocked against FastMCP's internal thread pool over Python's per-module import locks. Chrome never launched on the first call; any subsequent MCP interaction (even cancellation) unblocked it. Root cause confirmed via timestamped debug logging.
+- **Rich console encoding crash on Windows** — `LegacyWindowsTerm` renderer tried to encode Unicode box-drawing characters (`─`) through cp1252, crashing `rule()` calls before `asyncio.run()` could launch Chrome.
+
+---
+
 ## [1.1.0] - 2026-05-02
 
 Major hardening release. 50+ fixes from 19 rounds of code review. No new features — focused entirely on correctness, robustness, and security.
