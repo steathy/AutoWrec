@@ -15,8 +15,12 @@ def compress_line_horizontally(line: str, threshold=30) -> str:
         return line
     original_len = len(line)
 
-    prev_line = ""
-    while prev_line != line:
+    # Bounded iteration cap — pathological inputs (e.g. 1MB of "a") could
+    # otherwise loop quadratically and stall the worker. 5 passes is
+    # enough for any realistic pattern overlap.
+    prev_line, iters = "", 0
+    while prev_line != line and iters < 5:
+        iters += 1
         prev_line = line
         for match in re.finditer(r"(.+?)(?:\1){10,}", line):
             pattern = match.group(1)

@@ -401,10 +401,12 @@ class BrowserAgent:
         if target_info.type_ == "page":
             info(f"New Tab/Window Opened: {target_info.url}")
 
-            # Poll for zendriver to register the new tab (up to 3s)
+            # Poll for zendriver to register the new tab (up to 3s).
+            # Check-then-sleep so the common case (target already registered)
+            # exits with zero latency, instead of the old 100ms first-tick lag.
             tab_session = None
-            for _ in range(30):
-                await asyncio.sleep(0.1)
+            deadline = asyncio.get_running_loop().time() + 3.0
+            while True:
                 if not self.recording_active or not self.browser or self.browser.stopped or self.browser.connection.closed:
                     return
                 for t in self.browser.targets:
@@ -414,8 +416,9 @@ class BrowserAgent:
                     ):
                         tab_session = t
                         break
-                if tab_session:
+                if tab_session or asyncio.get_running_loop().time() >= deadline:
                     break
+                await asyncio.sleep(0.05)
 
             if not tab_session:
                 warn(f"Could not resolve Tab object for session {event.session_id} within 3s")
@@ -429,7 +432,7 @@ class BrowserAgent:
                 await tab_session.send(cdp.page.set_bypass_csp(enabled=True))
                 await tab_session.send(
                     cdp.network.enable(
-                        max_resource_buffer_size=100 * 1024 * 1024, max_total_buffer_size=1000 * 1024 * 1024
+                        max_resource_buffer_size=25 * 1024 * 1024, max_total_buffer_size=250 * 1024 * 1024
                     )
                 )
                 await tab_session.send(cdp.runtime.enable())
@@ -488,7 +491,7 @@ class BrowserAgent:
             await self.tab.send(cdp.page.enable())
             await self.tab.send(cdp.page.set_bypass_csp(enabled=True))
             await self.tab.send(
-                cdp.network.enable(max_resource_buffer_size=100 * 1024 * 1024, max_total_buffer_size=1000 * 1024 * 1024)
+                cdp.network.enable(max_resource_buffer_size=25 * 1024 * 1024, max_total_buffer_size=250 * 1024 * 1024)
             )
             await self.tab.send(cdp.runtime.enable())
 

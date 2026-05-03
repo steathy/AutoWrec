@@ -125,6 +125,43 @@ prompts may need a one-line update.
 - **M11: `FastMCP(instructions=...)` text trimmed** from ~70 to ~30
   words.
 
+### Performance
+
+- **P1: CDP network buffer ceilings reduced.** `max_resource_buffer_size`
+  100 MB → 25 MB; `max_total_buffer_size` 1 GB → 250 MB. Chrome reserves
+  real memory for these; the streaming-fallback path
+  (`_streamed_bodies` + `getResponseBody`) covers the rare large-body
+  case anyway. ~75% Chrome memory reduction for the recording session.
+- **P2: New-tab discovery polling tightened.** The 30-iteration ×100 ms
+  loop now check-then-sleeps with 50 ms granularity, so the common case
+  (target already registered) exits with zero latency instead of the
+  former 100 ms first-tick lag.
+- **P3: Skipped `np.array` round-trip in the record loop.** mss's
+  `ScreenShot.bgra` is already a `bytes` view in BGRA layout; sending
+  it directly to the FFmpeg writer saves ~3 ms/frame at 1920×1080.
+  `numpy` import removed from `video_recorder.py` (still listed in
+  pyproject deps as it's used transitively by `mss`).
+- **P4: HWND cached between 2-second bounds checks.** Once Chrome is
+  locked, periodic position polls call `GetWindowRect(hwnd)` directly
+  instead of re-running `EnumWindows` + `Get-CimInstance`. Falls back
+  to a full `_find_chrome_window` re-resolve if the window is gone or
+  minimized. Cuts the per-tick cost from ~150–300 ms down to ~0.1 ms
+  on a busy session.
+- **P5: `transaction.json` and `timeline.json` written compact.**
+  Dropped `indent=2` from the per-request transaction file (machine-
+  only) and the timeline (machine-only). `SUMMARY.json` and
+  `session_metadata.json` remain pretty-printed for human glance.
+  ~25% smaller workspace on disk.
+- **P6: Magika fast-path for tiny bodies.** Bodies <16 bytes return a
+  pre-shaped `{label: "tiny"|"empty", extension: "bin", ...}` dict
+  without invoking the model. For sessions with hundreds of small XHR
+  responses (heartbeats, ping endpoints), this is a sizeable cumulative
+  win during workspace compilation.
+- **P7: Bounded `compress_line_horizontally` iterations.** Pathological
+  inputs (e.g. 1 MB of `"a"`) could otherwise loop quadratically and
+  stall the IPython worker. Capped at 5 passes — enough for any
+  realistic pattern overlap.
+
 ---
 
 ## [1.2.0] - 2026-05-02

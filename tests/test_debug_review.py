@@ -917,6 +917,79 @@ def main():
     shutil.rmtree(bin_test_dir, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────
+    section("P. Phase 4 perf acceptance (P1, P3, P5, P6, P7)")
+    # ─────────────────────────────────────────────────────────────────────
+    import inspect
+
+    # P1: confirm we lowered the CDP buffer ceilings (source-grep is enough
+    # since the values are constants — runtime CDP test would need Chrome).
+    import autowrec.recorder.browser_agent as ba
+    ba_src = inspect.getsource(ba)
+    check(
+        "P1: max_resource_buffer_size lowered to 25 MB",
+        "max_resource_buffer_size=25 * 1024 * 1024" in ba_src
+        and "max_resource_buffer_size=100 * 1024 * 1024" not in ba_src,
+    )
+    check(
+        "P1: max_total_buffer_size lowered to 250 MB",
+        "max_total_buffer_size=250 * 1024 * 1024" in ba_src
+        and "max_total_buffer_size=1000 * 1024 * 1024" not in ba_src,
+    )
+
+    # P3: confirm video recorder writes screenshot.bgra directly.
+    import autowrec.recorder.video_recorder as vr
+    vr_src = inspect.getsource(vr)
+    check(
+        "P3: _record_loop writes screenshot.bgra (skips np.array)",
+        "writer.send(screenshot.bgra)" in vr_src
+        and "np.array(screenshot).tobytes()" not in vr_src,
+    )
+
+    # P5: transaction.json + timeline.json written with compact separators.
+    from autowrec.recorder import data_compressor as dc_mod
+    dc_src = inspect.getsource(dc_mod)
+    check(
+        "P5: transaction.json uses separators=(',',':')",
+        'transaction.json' in dc_src and "json.dump(make_serializable(transaction_data), f, separators" in dc_src,
+    )
+    check(
+        "P5: timeline.json uses separators=(',',':')",
+        "json.dump(make_serializable(timeline_events), f, separators" in dc_src,
+    )
+
+    # P6: Magika fast-path returns the expected shape for tiny bodies.
+    from autowrec.recorder.data_compressor import detect_content_type
+    tiny = detect_content_type(b"abc")
+    check(
+        "P6: tiny body skips Magika and returns 'tiny' label",
+        tiny is not None and tiny["label"] == "tiny" and tiny["extension"] == "bin",
+        f"got {tiny!r}",
+    )
+    empty = detect_content_type(b"")
+    check(
+        "P6: empty body returns 'empty' label",
+        empty is not None and empty["label"] == "empty",
+        f"got {empty!r}",
+    )
+    big = detect_content_type(b"<html><body>" + b"x" * 200 + b"</body></html>")
+    check(
+        "P6: large body still goes through Magika",
+        big is not None and big["label"] not in ("tiny", "empty"),
+        f"got label={big['label'] if big else None!r}",
+    )
+
+    # P7: compress_line_horizontally bounded under pathological input.
+    from autowrec.ipython_sandbox.utils import compress_line_horizontally
+    t0 = time.perf_counter()
+    ugly = compress_line_horizontally("a" * 50_000)
+    dt = time.perf_counter() - t0
+    check(
+        "P7: 50k-char pathological input completes in <1s",
+        dt < 1.0,
+        f"took {dt:.3f}s, output_len={len(ugly)}",
+    )
+
+    # ─────────────────────────────────────────────────────────────────────
     section("17. sh.exe path independent of $PATH (post-B8)")
     # ─────────────────────────────────────────────────────────────────────
     # Check the worker derives sh_path from working_dir, not $PATH.

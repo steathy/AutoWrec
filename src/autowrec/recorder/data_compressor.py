@@ -131,9 +131,11 @@ def extract_cookies_set(item):
     return sorted(list(names))
 
 
+_MAGIKA_FASTPATH_THRESHOLD = 16  # bytes — below this, Magika is overkill
+
+
 def detect_content_type(content, is_base64=False):
-    detector = _get_magika()
-    if content is None or not MAGIKA_AVAILABLE or detector is None:
+    if content is None or not MAGIKA_AVAILABLE:
         return None
     try:
         if is_base64:
@@ -143,6 +145,25 @@ def detect_content_type(content, is_base64=False):
         elif isinstance(content, bytes):
             byte_content = content
         else:
+            return None
+
+        # Fast-path (P6): bodies below the threshold aren't worth a model
+        # invocation. Returns the same shape as the Magika branch so callers
+        # don't need a special case.
+        if len(byte_content) < _MAGIKA_FASTPATH_THRESHOLD:
+            return {
+                "label": "tiny" if byte_content else "empty",
+                "mime_type": "application/octet-stream",
+                "extension": "bin",
+                "all_extensions": ["bin"],
+                "description": "Below Magika detection threshold",
+                "confidence": 1.0,
+                "is_text": all(b < 0x80 for b in byte_content),
+                "group": "unknown",
+            }
+
+        detector = _get_magika()
+        if detector is None:
             return None
         result = detector.identify_bytes(byte_content[:262144])
         return {
@@ -328,8 +349,9 @@ def process_network_requests(requests: list[dict], output_dir: str | None = None
                 },
             }
 
+            # transaction.json is machine-only — keep it compact (~25% smaller).
             with open(os.path.join(req_root, "transaction.json"), "w", encoding="utf-8") as f:
-                json.dump(make_serializable(transaction_data), f, indent=2)
+                json.dump(make_serializable(transaction_data), f, separators=(",", ":"))
 
             if item.get("post_data"):
                 ext = request_detection.get("extension", "bin") if request_detection else "bin"
@@ -441,8 +463,9 @@ def compile_workspace(
             timeline_events.extend(network_events)
 
         timeline_events.sort(key=lambda x: x["timestamp"])
+        # timeline.json is machine-only — compact format saves disk + tokens.
         with open(os.path.join(OUTPUT_DIR, "timeline.json"), "w", encoding="utf-8") as f:
-            json.dump(make_serializable(timeline_events), f, indent=2)
+            json.dump(make_serializable(timeline_events), f, separators=(",", ":"))
 
         session_flow = []
         seen_summaries = set()

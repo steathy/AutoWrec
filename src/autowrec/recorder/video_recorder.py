@@ -7,7 +7,6 @@ import time
 
 import imageio_ffmpeg
 import mss
-import numpy as np
 
 from ..console import error, info, log_exception, warn
 from ..console import video as log_video
@@ -15,12 +14,15 @@ from ..console import video as log_video
 FFMPEG_TIMEOUT = 120  # seconds — guard against hanging FFmpeg slice operations
 
 
-def _find_chrome_window(target_pid: int | None = None) -> dict | None:
-    """Find a Chrome/Chromium window's bounds using the Windows API.
+def _find_chrome_window(target_pid: int | None = None) -> tuple[dict, int] | None:
+    """Find a Chrome/Chromium window via the Windows API.
+
+    Returns (bounds_dict, hwnd) on success — the HWND lets callers cache the
+    handle and skip the EnumWindows + PowerShell scan on subsequent ticks.
+    Returns None if no matching window is found.
 
     When *target_pid* is given, only windows owned by that process (or its
-    children) are considered. This avoids grabbing an unrelated Chrome
-    window the user already had open.
+    descendants per `_get_process_tree`) are considered.
     """
     if sys.platform != "win32":
         return None
@@ -61,12 +63,43 @@ def _find_chrome_window(target_pid: int | None = None) -> dict | None:
                 w = rect.right - rect.left
                 h = rect.bottom - rect.top
                 if w > 100 and h > 100:
-                    result = {"left": rect.left, "top": rect.top, "width": w, "height": h}
+                    result = (
+                        {"left": rect.left, "top": rect.top, "width": w, "height": h},
+                        int(hwnd),
+                    )
                     return False
             return True
 
         EnumWindows(WNDENUMPROC(callback), 0)
         return result
+    except Exception:
+        return None
+
+
+def _get_window_rect(hwnd: int) -> dict | None:
+    """Cheap follow-up: read a known HWND's bounds without EnumWindows.
+
+    Returns None if the window is gone or minimized (zero-size rect). Lets
+    `_record_loop` poll bounds 30×/min without paying the PowerShell tax of
+    `_find_chrome_window` every time.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        if not ctypes.windll.user32.IsWindow(hwnd):
+            return None
+        if not ctypes.windll.user32.IsWindowVisible(hwnd):
+            return None
+        if not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return None
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
+        if w <= 0 or h <= 0:
+            return None
+        return {"left": rect.left, "top": rect.top, "width": w, "height": h}
     except Exception:
         return None
 
@@ -181,6 +214,7 @@ class ActionVideoRecorder:
                     "width": monitor["width"], "height": monitor["height"],
                 }
                 chrome_locked = False
+                cached_hwnd: int | None = None
                 resize_warned = False
 
                 frame_duration = 1.0 / self.fps
@@ -197,22 +231,24 @@ class ActionVideoRecorder:
                     if self.chrome_only and not chrome_locked:
                         pid = self._target_pid
                         if pid:
-                            chrome_bounds = _find_chrome_window(target_pid=pid)
-                            if chrome_bounds and chrome_bounds["width"] > 100 and chrome_bounds["height"] > 100:
-                                capture_region = chrome_bounds
-                                chrome_locked = True
-                                log_video(
-                                    f"Capturing Chrome window (PID {pid}): "
-                                    f"{capture_region['width']}x{capture_region['height']}"
-                                )
-                                # Restart writer with the Chrome window dimensions
-                                if writer is not None:
-                                    try:
-                                        writer.close()
-                                    except Exception:
-                                        pass
-                                    writer = None
-                                self.video_start_unix = time.time()
+                            found = _find_chrome_window(target_pid=pid)
+                            if found:
+                                chrome_bounds, cached_hwnd = found
+                                if chrome_bounds["width"] > 100 and chrome_bounds["height"] > 100:
+                                    capture_region = chrome_bounds
+                                    chrome_locked = True
+                                    log_video(
+                                        f"Capturing Chrome window (PID {pid}, HWND {cached_hwnd}): "
+                                        f"{capture_region['width']}x{capture_region['height']}"
+                                    )
+                                    # Restart writer with the Chrome window dimensions
+                                    if writer is not None:
+                                        try:
+                                            writer.close()
+                                        except Exception:
+                                            pass
+                                        writer = None
+                                    self.video_start_unix = time.time()
 
                     # Lazily create the writer (or recreate after Chrome lock-in)
                     if writer is None:
@@ -234,9 +270,16 @@ class ActionVideoRecorder:
                         )
                         writer.send(None)
 
-                    # Periodically re-check Chrome window position
+                    # Periodically re-check Chrome window position. Use the
+                    # cached HWND for the cheap path; fall back to full
+                    # _find_chrome_window only if the window is gone.
                     if chrome_locked and (loop_start - last_bounds_check) >= bounds_check_interval:
-                        new_bounds = _find_chrome_window(target_pid=self._target_pid)
+                        new_bounds = _get_window_rect(cached_hwnd) if cached_hwnd else None
+                        if new_bounds is None:
+                            # HWND went away (window closed/minimized) — re-resolve.
+                            found = _find_chrome_window(target_pid=self._target_pid)
+                            if found:
+                                new_bounds, cached_hwnd = found
                         if new_bounds and new_bounds["width"] > 100 and new_bounds["height"] > 100:
                             if (new_bounds["left"] != capture_region["left"]
                                     or new_bounds["top"] != capture_region["top"]):
@@ -250,7 +293,9 @@ class ActionVideoRecorder:
                         last_bounds_check = loop_start
 
                     screenshot = sct.grab(capture_region)
-                    writer.send(np.array(screenshot).tobytes())
+                    # Skip the np.array round-trip — mss.ScreenShot.bgra is
+                    # already a bytes view in BGRA layout (P3, ~3ms/frame win).
+                    writer.send(screenshot.bgra)
 
                     elapsed = time.time() - loop_start
                     sleep_time = frame_duration - elapsed
