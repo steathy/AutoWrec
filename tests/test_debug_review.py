@@ -164,6 +164,63 @@ def main():
         f"got {len(agent._skipped_ids)}",
     )
 
+    # Sanity follow-up: a blocked URL redirecting to an allowed URL must
+    # un-mark the request_id so its extra_info isn't dropped.
+    agent2 = BrowserAgent(blocklist=FakeBlocklist())
+
+    class FakeReqAds:
+        url = "https://ads.example.com/x"
+        method = "GET"
+        headers = {}
+        post_data = None
+
+    class FakeReqSafe:
+        url = "https://safe.example.com/y"
+        method = "GET"
+        headers = {}
+        post_data = None
+
+    class FakeBlockedEvent:
+        request_id = "rid-redirect"
+        request = FakeReqAds()
+        type_ = "Other"
+        timestamp = 0.0
+        wall_time = None
+        redirect_response = None
+
+    class FakeRedirectedEvent:
+        request_id = "rid-redirect"
+        request = FakeReqSafe()
+        type_ = "Other"
+        timestamp = 0.0
+        wall_time = None
+        redirect_response = None  # in real life would carry the 302
+
+    asyncio.run(agent2.request_handler(FakeBlockedEvent()))
+    asyncio.run(agent2.request_handler(FakeRedirectedEvent()))
+
+    check(
+        "B1: redirected-from-blocked URL clears the skip mark",
+        "rid-redirect" not in agent2._skipped_ids
+        and "rid-redirect" in agent2.active_map,
+    )
+
+    class FakeAssoc2:
+        def to_json(self):
+            return {"cookie": {"name": "after_redirect", "value": "ok"}}
+
+    class FakeRedirectExtra:
+        request_id = "rid-redirect"
+        associated_cookies = [FakeAssoc2()]
+
+    asyncio.run(agent2.req_extra_info(FakeRedirectExtra()))
+    cookies = agent2.active_map["rid-redirect"]["cookies_sent_details"]
+    check(
+        "B1: extra_info for redirected request is captured (not dropped)",
+        any(c.get("cookie", {}).get("name") == "after_redirect" for c in cookies),
+        f"got cookies={cookies!r}",
+    )
+
     # ─────────────────────────────────────────────────────────────────────
     section("3. mcp_server._safe_resolve case-sensitivity (Windows)")
     # ─────────────────────────────────────────────────────────────────────

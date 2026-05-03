@@ -198,6 +198,10 @@ class BrowserAgent:
 
         self.captured_requests.append(request_obj)
         self.active_map[event.request_id] = request_obj
+        # If a redirect went from a blocked URL to an allowed one, the
+        # request_id was previously marked as skipped. Now that we're
+        # tracking it, drop the skip mark so its extra_info isn't dropped.
+        self._skipped_ids.pop(str(event.request_id), None)
         self.stats["total_requests"] += 1
         if event.type_ in (
             cdp.network.ResourceType.DOCUMENT,

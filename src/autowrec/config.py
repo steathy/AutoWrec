@@ -197,18 +197,23 @@ def _load_config_toml():
     output = _safe_table(data, "output")
     if "dir" in output:
         dir_val = output["dir"]
-        if isinstance(dir_val, str) and dir_val.strip():
-            try:
-                OUTPUT_DIR = Path(dir_val).resolve()
-                WORKSPACE_DIR = OUTPUT_DIR / "workspace"
-                BLOCKLIST_DIR = OUTPUT_DIR / "blocklist"
-                BLOCKLIST_DB = OUTPUT_DIR / "blocklist.db"
-            except Exception:
-                print(f"[WARN] Invalid output.dir path: {dir_val!r}, using default", file=sys.stderr)
-        elif isinstance(dir_val, str):
-            # Empty / whitespace-only string would resolve to CWD, leaking the
-            # user's working directory as the workspace root.
-            print("[WARN] output.dir is empty, using default", file=sys.stderr)
+        if isinstance(dir_val, str):
+            stripped = dir_val.strip()
+            if stripped:
+                try:
+                    # Strip before passing to Path so leading/trailing whitespace
+                    # doesn't get baked into the resolved path on Windows (where
+                    # "   C:\\foo" is treated as a relative path under CWD).
+                    OUTPUT_DIR = Path(stripped).resolve()
+                    WORKSPACE_DIR = OUTPUT_DIR / "workspace"
+                    BLOCKLIST_DIR = OUTPUT_DIR / "blocklist"
+                    BLOCKLIST_DB = OUTPUT_DIR / "blocklist.db"
+                except Exception:
+                    print(f"[WARN] Invalid output.dir path: {dir_val!r}, using default", file=sys.stderr)
+            else:
+                # Empty / whitespace-only string would resolve to CWD, leaking
+                # the user's working directory as the workspace root.
+                print("[WARN] output.dir is empty, using default", file=sys.stderr)
         else:
             print(f"[WARN] output.dir must be a string, got {type(dir_val).__name__}: {dir_val!r}. Using default.", file=sys.stderr)
 
