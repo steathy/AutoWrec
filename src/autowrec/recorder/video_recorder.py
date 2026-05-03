@@ -72,23 +72,51 @@ def _find_chrome_window(target_pid: int | None = None) -> dict | None:
 
 
 def _get_process_tree(parent_pid: int) -> set[int]:
-    """Return the set containing *parent_pid* and all its descendant PIDs."""
-    pids = {parent_pid}
-    try:
-        import subprocess
+    """Return {parent_pid} and all descendant PIDs.
 
+    Uses PowerShell Get-CimInstance because wmic was removed on
+    Windows 11 24H2+. One process snapshot per call, then a local BFS —
+    avoids the recursive subprocess fan-out the wmic version did.
+    """
+    pids = {parent_pid}
+    if sys.platform != "win32":
+        return pids
+    try:
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance Win32_Process | "
+            "Select-Object ProcessId,ParentProcessId | "
+            "ConvertTo-Csv -NoTypeInformation",
+        ]
         out = subprocess.check_output(
-            ["wmic", "process", "where", f"(ParentProcessId={parent_pid})", "get", "ProcessId"],
-            text=True, stderr=subprocess.DEVNULL,
+            cmd,
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        for line in out.strip().splitlines()[1:]:
-            line = line.strip()
-            if line.isdigit():
-                child = int(line)
+    except (subprocess.SubprocessError, OSError, FileNotFoundError):
+        return pids
+
+    children: dict[int, list[int]] = {}
+    for line in out.splitlines()[1:]:
+        try:
+            pid_s, ppid_s = (s.strip().strip('"') for s in line.split(",", 1))
+            pid_i, ppid_i = int(pid_s), int(ppid_s)
+        except (ValueError, IndexError):
+            continue
+        children.setdefault(ppid_i, []).append(pid_i)
+
+    stack = [parent_pid]
+    while stack:
+        cur = stack.pop()
+        for child in children.get(cur, []):
+            if child not in pids:
                 pids.add(child)
-                pids |= _get_process_tree(child)
-    except Exception:
-        pass
+                stack.append(child)
     return pids
 
 

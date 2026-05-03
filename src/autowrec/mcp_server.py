@@ -49,6 +49,18 @@ def _build_server():
     def _get_workspace() -> str:
         from . import config
 
+        # If the most recent record_session failed and never produced a
+        # workspace, refuse to silently fall back to a previous one.
+        err = _state.get("recording_error")
+        if err and not _state.get("workspace"):
+            raise ValueError(
+                f"Last recording failed: {err}. Call record_session again."
+            )
+        thread = _state.get("recording_thread")
+        if thread and thread.is_alive():
+            raise ValueError(
+                "A recording is in progress. Call check_recording until it finishes."
+            )
         if _state["workspace"] and os.path.isdir(_state["workspace"]):
             return _state["workspace"]
         default = str(config.WORKSPACE_DIR / "session_dump")
@@ -112,7 +124,10 @@ def _build_server():
 
         config.ensure_output_dirs()
 
+        # Invalidate any prior session pointer so a failed recording can't
+        # silently surface the previous workspace through read_* tools.
         _state["recording_error"] = None
+        _state["workspace"] = None
 
         def _run_in_background():
             try:

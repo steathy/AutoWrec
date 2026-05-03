@@ -52,30 +52,42 @@ def section(title):
 
 def main():
     # ─────────────────────────────────────────────────────────────────────
-    section("1. wmic-based _get_process_tree on modern Windows")
+    section("1. _get_process_tree finds child PIDs (post-C1 fix)")
     # ─────────────────────────────────────────────────────────────────────
-    # Windows 11 24H2/25H2 ships without wmic by default.
-    # _get_process_tree silently falls back to {parent_pid}, so Chrome
-    # window detection by PID becomes incorrect for renderer-owned windows.
+    # Windows 11 24H2/25H2 ships without wmic. After C1, the function uses
+    # PowerShell Get-CimInstance and should find children of the current
+    # process even when wmic is absent.
 
     from autowrec.recorder.video_recorder import _get_process_tree
 
     if sys.platform == "win32":
-        wmic_present = shutil.which("wmic") is not None
-        if not wmic_present:
+        # Spawn a real child so we have something to discover.
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(20)"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            time.sleep(0.5)  # let CIM see the new process
             tree = _get_process_tree(os.getpid())
             check(
-                "wmic missing → _get_process_tree returns only self",
-                tree == {os.getpid()},
+                "C1: _get_process_tree contains current PID",
+                os.getpid() in tree,
                 f"got {tree}",
             )
-            print("    NOTE: wmic is removed on Win11 24H2+. _get_process_tree "
-                  "should use 'tasklist /FI' or PowerShell Get-CimInstance.")
-        else:
-            tree = _get_process_tree(os.getpid())
-            check("wmic present → tree has at least self", os.getpid() in tree)
+            check(
+                "C1: _get_process_tree finds spawned child PID",
+                child.pid in tree,
+                f"child={child.pid}, tree={tree}",
+            )
+        finally:
+            child.terminate()
+            try:
+                child.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                child.kill()
     else:
-        skip("_get_process_tree wmic test", "non-Windows platform")
+        skip("_get_process_tree test", "non-Windows platform")
 
     # ─────────────────────────────────────────────────────────────────────
     section("2. Orphan-extra-info leak for blocklist-skipped requests")
@@ -351,47 +363,65 @@ def main():
     )
 
     # ─────────────────────────────────────────────────────────────────────
-    section("9. Stale workspace state survives across recordings")
+    section("9. Failed record_session clears workspace pointer (post-C2 fix)")
     # ─────────────────────────────────────────────────────────────────────
-    # If a recording fails AFTER a previous one set _state['workspace'],
-    # _get_workspace will keep returning the OLD workspace path silently.
+    # Real flow: record_session() must invalidate the cached workspace at
+    # call time. If the new recording fails, read_* tools must surface the
+    # error rather than silently returning the prior session.
 
     async def stale_test():
         from autowrec.mcp_server import _build_server as bs2
         m, st, _ = bs2()
 
+        # Pretend a prior record_session succeeded.
         old = tempfile.mkdtemp(prefix="autowrec_stale_old_")
         os.makedirs(os.path.join(old, "dummy"), exist_ok=True)
-        st["workspace"] = old  # pretend a prior recording succeeded
-        st["recording_thread"] = None
+        st["workspace"] = old
 
-        # Now simulate a failed recording: thread completes, workspace
-        # never updated, recording_error set.
+        # Patch run_recording to simulate a failure on the next attempt.
+        from autowrec import mcp_server as mcp_mod
+        saved = mcp_mod._build_server  # noqa: F841 (kept for ref)
+
+        # Drive record_session through its real path with a stub thread.
+        # Easier: directly emulate the post-call state record_session
+        # leaves behind: workspace cleared, error set.
+        await m.call_tool("record_session", {"url": "about:blank"})
+        # Replace the live thread with a finished one carrying the failure
+        class FinishedThread:
+            def is_alive(self):
+                return False
+        st["recording_thread"] = FinishedThread()
         st["recording_error"] = "boom"
+        # record_session itself cleared workspace=None. Verify that.
+        workspace_cleared = st.get("workspace") in (None, "")
 
-        # check_recording reports the error...
+        # Reading session_summary now should raise with the error message.
         cr = (await m.call_tool("check_recording", {})).content[0].text
-
-        # ... but read_session_summary would still try to use the OLD workspace!
         try:
             res = await m.call_tool("read_session_summary", {})
-            stale_used = "FileNotFoundError" not in (res.content[0].text or "") \
-                         and old in str(st["workspace"])
+            text = res.content[0].text
+            surfaces_error = ("boom" in text) or ("failed" in text.lower())
         except Exception as exc:
-            stale_used = "FileNotFoundError" in str(exc)
-        shutil.rmtree(old, ignore_errors=True)
-        return cr, stale_used
+            surfaces_error = ("boom" in str(exc)) or ("failed" in str(exc).lower())
 
-    cr, stale_used = asyncio.run(stale_test())
+        shutil.rmtree(old, ignore_errors=True)
+        return workspace_cleared, cr, surfaces_error
+
+    cleared, cr, surfaces_error = asyncio.run(stale_test())
     check(
-        "check_recording still reports prior error",
-        "error" in cr.lower(),
+        "C2: record_session clears st['workspace'] at call time",
+        cleared,
+        f"workspace not cleared (still: {cr[:80]!r})",
     )
     check(
-        "BUG: read_session_summary ignores recording_error; uses stale workspace",
-        stale_used,
-        "if a fresh record_session fails, the AI silently sees the OLD session"
-        " — recording_error should NOT be cleared until consumed",
+        "C2: check_recording surfaces 'boom' error",
+        "boom" in cr.lower() or "error" in cr.lower(),
+        f"got: {cr[:80]}",
+    )
+    check(
+        "C2: read_session_summary refuses stale workspace, surfaces error",
+        surfaces_error,
+        "should raise/return error referencing the failed recording",
     )
 
     # ─────────────────────────────────────────────────────────────────────

@@ -6,6 +6,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [Unreleased] — 1.3.0
+
+In progress. Bug-fix and MCP-token-efficiency release driven by the v1.2
+post-release code review (see `tests/test_debug_review.py` for the
+regression suite that surfaced these defects).
+
+### Fixed (Critical)
+
+- **C1: Chrome-only video capture broken on Windows 11 24H2/25H2.**
+  `_get_process_tree` shelled out to `wmic`, which Microsoft removed by
+  default on recent Windows builds. The recursive subprocess calls
+  silently returned only the parent PID, so `_find_chrome_window` could
+  not match windows owned by Chrome's child processes and the recorder
+  fell back to full-screen capture (or failed to lock at all). Replaced
+  with a single PowerShell `Get-CimInstance Win32_Process` call plus a
+  local BFS over the parent→children map. Also faster than the original
+  recursive wmic version.
+- **C2: Stale workspace pointer survived failed recordings.** When
+  `record_session` was retried after a successful prior session and the
+  new attempt failed, `_state["workspace"]` still held the previous
+  session's path, and `read_session_summary` / `read_timeline` /
+  `read_transaction` quietly returned data from the OLD recording.
+  `record_session` now invalidates `_state["workspace"]` at call time;
+  `_get_workspace` raises a clear "Last recording failed: ..." error if
+  the most recent attempt errored without producing a workspace.
+
+---
+
 ## [1.2.0] - 2026-05-02
 
 Critical MCP server fix. The `record_session` tool was completely non-functional — Chrome never launched due to a Python import-lock deadlock.
