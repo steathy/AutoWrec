@@ -169,10 +169,13 @@ speed = 1.0
 ## Testing
 
 ```bash
-python tests/test_standalone.py
+python tests/test_standalone.py     # primary integration suite
+python tests/test_debug_review.py   # regression suite from review passes
 ```
 
-Runs a standalone test suite covering imports, config validation, MCP tools, path traversal protection, workspace operations, IPython execution, console redirect safety, redaction, input validation, and binary body encoding.
+`test_standalone.py` covers imports, config validation, MCP tools, path traversal protection, workspace operations, IPython execution, console redirect safety, redaction, input validation, and binary body encoding via `read_file`.
+
+`test_debug_review.py` is the regression suite seeded by the v1.2 → v1.3 code-review passes. It pins behavior for fixes in C1, C2, B1–B10, M-series token budgets, and P-series perf items.
 
 ## Architecture
 
@@ -196,6 +199,7 @@ src/autowrec/
 
 tests/
 ├── test_standalone.py     # Unit/integration tests
+├── test_debug_review.py   # Regression suite from review passes
 └── demo_record.py         # Interactive recording demo
 ```
 
