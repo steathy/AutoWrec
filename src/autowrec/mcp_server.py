@@ -379,17 +379,17 @@ def _build_server():
                 preview = raw[:64].hex()
                 content = preview + ("..." if len(raw) > 64 else "")
                 encoding = "hex-preview"
-            return json.dumps(
-                {
-                    "content": content,
-                    "encoding": encoding,
-                    "size": size,
-                    "bytes_read": len(raw),
-                    "has_more": len(raw) < size,
-                    "hint": "Call again with mode='raw' for the full file.",
-                },
-                separators=(",", ":"),
-            )
+            payload = {
+                "content": content,
+                "encoding": encoding,
+                "size": size,
+                "bytes_read": len(raw),
+                "has_more": len(raw) < size,
+            }
+            # Only nudge the AI toward raw mode when there's actually more to read.
+            if payload["has_more"]:
+                payload["hint"] = "Call again with mode='raw' for the full file."
+            return json.dumps(payload, separators=(",", ":"))
 
         # raw mode
         with open(file_path, "rb") as f:
@@ -513,8 +513,9 @@ def _build_server():
         code: Annotated[str, "Python/IPython code to execute in the persistent Python environment"],
         timeout: Annotated[int | None, "Override timeout in seconds (default: from config)"] = None,
     ) -> str:
-        """Run Python in a persistent IPython environment. State (vars, imports)
-        persists across calls. Magics: %reset, %restore, %view_output Cell_N."""
+        """Run Python in a persistent IPython env (cwd=workspace root, so use
+        e.g. 'session_dump/SUMMARY.json'). State persists. Magics: %reset, %restore,
+        %view_output Cell_N. Available: requests, curl_cffi, beautifulsoup4."""
         sandbox = _get_sandbox()
         kwargs = {}
         if timeout is not None:
