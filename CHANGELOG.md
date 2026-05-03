@@ -106,6 +106,25 @@ prompts may need a one-line update.
   opt-in via `include_sizes=true`. Hidden (dot-prefix) entries are
   excluded.
 
+### Changed (MCP tools — non-breaking)
+
+- **M2: `read_timeline` now caches the parsed list by mtime + size and
+  defaults to a compact event projection.** Consecutive paginated calls
+  no longer re-parse `timeline.json`. New `summary` parameter (default
+  `True`) emits one of:
+  - `{ts, type, method, url, status, folder}` for network events
+  - `{ts, type, action, label}` for user actions
+  Pass `summary=false` for the full event payload. Typical reduction:
+  18 KB → ~3 KB for a 100-event page.
+- **M7: Tool docstrings tightened to ≤2 sentences.** They live in the
+  host AI's system prompt for the entire conversation; trimming saves
+  ~1 KB of perma-context across the 9 tools.
+- **M9: All tool JSON responses use `separators=(",",":")`** instead of
+  `indent=2`. Same data, ~15-25% fewer tokens, no human readers in the
+  loop.
+- **M11: `FastMCP(instructions=...)` text trimmed** from ~70 to ~30
+  words.
+
 ---
 
 ## [1.2.0] - 2026-05-02

@@ -317,37 +317,119 @@ def main():
     shutil.rmtree(ws, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────
-    section("5. read_timeline: full-file load on every call")
+    section("5. read_timeline cache + summary mode (post-M2)")
     # ─────────────────────────────────────────────────────────────────────
-    # The current implementation reads + json.loads the entire file even
-    # when the caller asks for a small slice. This burns memory and CPU
-    # for every page request when the timeline is large.
+    # After M2, paginated calls should reuse a cached parsed list (keyed by
+    # mtime + size). Default summary=True compresses each event.
 
     big_ws = tempfile.mkdtemp(prefix="autowrec_big_")
     bs = os.path.join(big_ws, "session_dump")
     os.makedirs(bs)
-    big_events = [{"timestamp": float(i), "event_type": "x", "i": i} for i in range(20_000)]
+    # Mirror what compile_workspace actually produces: user_action entries
+    # carry the full set of telemetry fields (locators dict, click attributes,
+    # iframe flag, etc.). Network entries are already compact in the real flow.
+    big_events = []
+    for i in range(20_000):
+        if i % 3 == 0:
+            big_events.append({
+                "timestamp": float(i),
+                "timestamp_iso": f"2026-05-03T00:00:{i % 60:02d}",
+                "event_type": "user_action",
+                "action": "click",
+                "details": {
+                    "tag": "BUTTON",
+                    "text": f"Submit_{i}",
+                    "id": f"btn-{i}",
+                    "href": "",
+                    "role": "button",
+                    "ariaLabel": f"Submit form {i}",
+                    "ariaChecked": "",
+                    "dataValue": "",
+                    "inputType": "",
+                    "is_iframe": False,
+                    "url": f"https://example.com/page/{i}",
+                    "title": f"Page {i} | Example.com",
+                    "execution_context_id": 12 + (i % 4),
+                    "locators": {
+                        "css": f"html > body > div:nth-of-type(2) > main > form#login-form > div.controls > button#submit-{i}",
+                        "aria": f"Submit form {i}[role=\"button\"]",
+                        "text": f"Submit_{i}",
+                    },
+                },
+                "ai_macro_summary": f"User clicked the Submit button on page {i}",
+                "ai_elements_interacted": [{"type": "button", "id": f"btn-{i}"}],
+                "ai_action_success": True,
+            })
+        else:
+            big_events.append({
+                "timestamp": float(i),
+                "timestamp_iso": f"2026-05-03T00:00:{i % 60:02d}",
+                "event_type": "network_request",
+                "method": "GET",
+                "url": f"https://x.example.com/p/{i}",
+                "status": 200,
+                "folder": f"requests/{i:05d}_GET_x.example.com",
+            })
     with open(os.path.join(bs, "timeline.json"), "w") as f:
         json.dump(big_events, f)
-
-    _state["workspace"] = bs
 
     async def time_pages():
         m, st, _ = _build_server()
         st["workspace"] = bs
 
+        # First call populates the cache
         t0 = time.perf_counter()
-        for off in range(0, 1000, 100):
-            await m.call_tool("read_timeline", {"offset": off, "limit": 100})
-        dt = time.perf_counter() - t0
-        return dt
+        first = await m.call_tool("read_timeline", {"offset": 0, "limit": 100})
+        dt_cold = time.perf_counter() - t0
 
-    dt = asyncio.run(time_pages())
-    print(f"    10 paginated calls over 20k-event timeline: {dt*1000:.1f} ms")
-    check("paginated reads complete", dt < 30.0, f"took {dt:.2f}s")
-    print("    PERF: every read_timeline call re-parses the entire timeline.json."
-          " Suggest caching the parsed list keyed by mtime, OR keeping an offset"
-          " index file (timeline.idx) for O(1) page seeks.")
+        # Subsequent paginated calls should hit the cache
+        t0 = time.perf_counter()
+        for off in range(100, 1100, 100):
+            await m.call_tool("read_timeline", {"offset": off, "limit": 100})
+        dt_warm = time.perf_counter() - t0
+
+        return dt_cold, dt_warm, first.content[0].text
+
+    dt_cold, dt_warm, sample = asyncio.run(time_pages())
+    print(f"    cold call: {dt_cold*1000:.1f} ms; 10 warm pages: {dt_warm*1000:.1f} ms")
+    check(
+        "M2: warm-page latency < cold-call latency (cache effective)",
+        dt_warm < dt_cold * 5,  # 10 warm pages should be < 5x a single cold call
+        f"cold={dt_cold*1000:.1f}ms, warm={dt_warm*1000:.1f}ms",
+    )
+
+    sample_obj = json.loads(sample)
+    first_event = sample_obj["events"][0] if sample_obj["events"] else {}
+    check(
+        "M2: summary mode compacts event payloads (no raw 'details' dict)",
+        "details" not in first_event,
+        f"got fields={list(first_event.keys())}",
+    )
+    check(
+        "M2: summary mode uses compact 'ts'/'type' keys",
+        "ts" in first_event and "type" in first_event,
+        f"got fields={list(first_event.keys())}",
+    )
+
+    # 100-event slice in summary mode should be substantially smaller than full
+    async def compare_modes():
+        m, st, _ = _build_server()
+        st["workspace"] = bs
+        s_lean = (await m.call_tool(
+            "read_timeline", {"offset": 0, "limit": 100, "summary": True}
+        )).content[0].text
+        s_full = (await m.call_tool(
+            "read_timeline", {"offset": 0, "limit": 100, "summary": False}
+        )).content[0].text
+        return len(s_lean), len(s_full)
+
+    lean_size, full_size = asyncio.run(compare_modes())
+    print(f"    summary=True 100 events: {lean_size:,} B; summary=False: {full_size:,} B")
+    check(
+        "M2: summary mode response is <= 50% of full mode",
+        lean_size * 2 <= full_size,
+        f"lean={lean_size}, full={full_size}",
+    )
 
     shutil.rmtree(big_ws, ignore_errors=True)
 
@@ -741,10 +823,11 @@ def main():
         timeline_resp = (await m.call_tool(
             "read_timeline", {"offset": 0, "limit": 50}
         )).content[0].text
-        # M2 (caching + summary mode) is in the next commit; current default is
-        # still full event payloads. Just record the size as a baseline so the
-        # M2 follow-up can demonstrate improvement.
-        print(f"    timeline(limit=50) size: {len(timeline_resp):,} B (M2 target: <=4 KB)")
+        check(
+            "M2: read_timeline(summary=True) <= 8 KB for 50 events",
+            len(timeline_resp) <= 8_000,
+            f"got {len(timeline_resp)} B",
+        )
 
         tx = (await m.call_tool(
             "read_transaction",

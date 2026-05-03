@@ -36,11 +36,9 @@ def _build_server():
     mcp = FastMCP(
         name="autowrec",
         instructions=(
-            "AutoWrec records browser sessions and lets you explore the captured "
-            "data (network requests, user actions, video). Use record_session to "
-            "capture a session, then explore the workspace with read_* tools. "
-            "Use execute_code to run Python in a persistent environment for building "
-            "automation scripts. No API keys are needed — you are the AI."
+            "Record a browser session with record_session, poll check_recording, "
+            "then explore via read_session_summary / read_timeline / read_transaction. "
+            "Use execute_code to prototype against the live site."
         ),
     )
 
@@ -103,17 +101,9 @@ def _build_server():
         url: Annotated[str, "The starting URL to navigate to"] = "about:blank",
         enable_video: Annotated[bool | None, "Whether to record screen video (default: from config)"] = None,
     ) -> str:
-        """Record a browser session. Launches Chrome with CDP instrumentation.
-        The user browses freely and closes the browser or presses Ctrl+C to stop.
-        Network requests, user actions (clicks, typing, navigation), and optionally
-        screen video are captured and compiled into a structured workspace.
-
-        AI analysis is NOT performed — you (the host AI) analyze the data yourself.
-
-        Returns immediately after launching Chrome. The recording runs in the
-        background. Call check_recording to poll status, or just wait for the
-        user to close the browser and then call read_session_summary.
-        """
+        """Launch Chrome with CDP capture and return immediately. Poll
+        check_recording until the user closes the browser, then explore
+        the workspace via read_session_summary."""
         from . import config
 
         if _state["recording_thread"] and _state["recording_thread"].is_alive():
@@ -151,10 +141,7 @@ def _build_server():
 
     @mcp.tool()
     def check_recording() -> str:
-        """Check whether a background recording session is still running or has finished.
-        Call this after record_session to know when the user has closed the browser
-        and the workspace is ready for exploration.
-        """
+        """Report whether a background recording is running, finished, or errored."""
         thread = _state.get("recording_thread")
         if thread is None:
             return "No recording has been started. Call record_session first."
@@ -172,10 +159,8 @@ def _build_server():
     def read_session_summary(
         verbose: Annotated[bool, "Return the full SUMMARY.json (default: ~10-line digest)"] = False,
     ) -> str:
-        """Lean digest of the recorded session: counts, top domains, auth presence.
-        Pass verbose=true for the full SUMMARY.json (statistics, session_flow, etc).
-        Recommended first tool to call after a recording.
-        """
+        """Digest of the recorded session (counts, top domains, auth presence).
+        Pass verbose=true for the full SUMMARY.json."""
         workspace = _get_workspace()
         summary_path = os.path.join(workspace, "SUMMARY.json")
         if not os.path.exists(summary_path):
@@ -211,27 +196,69 @@ def _build_server():
         }
         return json.dumps(digest, separators=(",", ":"))
 
+    def _summarize_event(ev):
+        """Compact projection of a timeline event — keeps just the high-signal
+        fields the host AI uses to decide what to drill into."""
+        ev_type = ev.get("event_type")
+        out = {"ts": ev.get("timestamp"), "type": ev_type}
+        if ev_type == "network_request":
+            out["method"] = ev.get("method")
+            out["url"] = ev.get("url")
+            out["status"] = ev.get("status")
+            folder = ev.get("folder")
+            if folder:
+                out["folder"] = folder
+        else:
+            details = ev.get("details") or {}
+            out["action"] = ev.get("action")
+            label = (
+                ev.get("ai_macro_summary")
+                or details.get("text")
+                or details.get("value")
+                or details.get("newUrl")
+            )
+            if label:
+                out["label"] = str(label)[:120]
+        return out
+
     @mcp.tool()
     def read_timeline(
         offset: Annotated[int, "Start index (0-based) for pagination"] = 0,
         limit: Annotated[int, "Maximum number of events to return"] = 100,
+        summary: Annotated[
+            bool,
+            "Compact event projection (default). Set to false for full event payloads.",
+        ] = True,
     ) -> str:
-        """Read the timeline.json from the recorded session.
-        Contains time-sorted interleaved events: user_action (clicks, keypresses,
-        page navigations) and network_request (method, url, status, folder ref).
-        Use offset/limit for large timelines.
-        """
+        """Paginated time-sorted events (actions + network).
+        Compact summary by default; pass summary=false for full event payloads."""
         offset = max(0, offset)
         limit = max(1, min(limit, 1000))
         workspace = _get_workspace()
         timeline_path = os.path.join(workspace, "timeline.json")
         if not os.path.exists(timeline_path):
             raise FileNotFoundError(f"timeline.json not found at {timeline_path}")
-        with open(timeline_path, encoding="utf-8") as f:
-            events = json.load(f)
+
+        # mtime + size cache so consecutive paginated calls don't re-parse the
+        # whole file. Invalidated automatically when the workspace changes.
+        st = os.stat(timeline_path)
+        cache_key = (timeline_path, st.st_mtime_ns, st.st_size)
+        cached = _state.get("_timeline_cache")
+        if cached and cached[0] == cache_key:
+            events = cached[1]
+        else:
+            with open(timeline_path, encoding="utf-8") as f:
+                events = json.load(f)
+            _state["_timeline_cache"] = (cache_key, events)
+
         total = len(events)
-        sliced = events[offset : offset + limit]
-        return json.dumps({"events": sliced, "total": total, "has_more": offset + limit < total}, indent=2)
+        page = events[offset : offset + limit]
+        if summary:
+            page = [_summarize_event(e) for e in page]
+        return json.dumps(
+            {"events": page, "total": total, "has_more": offset + limit < total},
+            separators=(",", ":"),
+        )
 
     @mcp.tool()
     def read_transaction(
@@ -241,11 +268,8 @@ def _build_server():
             "minimal: method/url/status/timing/has_body. headers: + req+res headers. full: + cookies, detection.",
         ] = "minimal",
     ) -> str:
-        """Inspect a single HTTP transaction.
-        Body content is NOT inlined — call read_file on
-        request_folder + '/req_payload.<ext>' or '/res_body.<ext>' for it.
-        The extension is in request.content_detection.extension.
-        """
+        """Inspect one HTTP transaction. Bodies are NOT inlined — call read_file on
+        request_folder + '/req_payload.<ext>' (extension in content_detection)."""
         workspace = _get_workspace()
         folder_path = _safe_resolve(workspace, request_folder)
 
@@ -295,9 +319,7 @@ def _build_server():
         subdirectory: Annotated[str, "Subdirectory relative to session_dump (e.g. 'requests')"] = "",
         include_sizes: Annotated[bool, "Include file sizes in the response (off by default)"] = False,
     ) -> str:
-        """List entries in the workspace. Hidden (dot-prefix) files are excluded.
-        Pass include_sizes=true if you actually need byte counts.
-        """
+        """List entries in the workspace. Hidden (dot-prefix) entries are skipped."""
         workspace = _get_workspace()
         target = _safe_resolve(workspace, subdirectory) if subdirectory else workspace
 
@@ -327,10 +349,8 @@ def _build_server():
         offset: Annotated[int, "Byte offset (raw mode only)"] = 0,
         limit: Annotated[int, "Max bytes to read in raw mode (default 50KB)"] = 50_000,
     ) -> str:
-        """Read a file from the workspace.
-        Default 'head' mode returns the first 1KB (binary as hex preview).
-        Use 'stat' for metadata only, 'raw' with offset/limit for full content.
-        """
+        """Read a workspace file. Default 'head' mode returns the first 1KB.
+        Use 'stat' for metadata only, 'raw' with offset/limit for full content."""
         offset = max(0, offset)
         limit = max(1, min(limit, 1_000_000))
         workspace = _get_workspace()
@@ -406,9 +426,7 @@ def _build_server():
         ] = "low",
     ) -> str:
         """Sample JPEG frames from a video clip as base64 images.
-        Defaults are tuned for token efficiency — bump quality / num_frames
-        only when you need detail.
-        """
+        Defaults are tuned for token efficiency — bump quality only when you need detail."""
         num_frames = max(1, min(num_frames, 12))
         workspace = _get_workspace()
         video_path = _safe_resolve(workspace, clip_path)
@@ -495,16 +513,8 @@ def _build_server():
         code: Annotated[str, "Python/IPython code to execute in the persistent Python environment"],
         timeout: Annotated[int | None, "Override timeout in seconds (default: from config)"] = None,
     ) -> str:
-        """Execute Python code in a persistent IPython environment.
-        State persists across calls (variables, imports, session history).
-        Code runs with the user's local permissions — this is not a security sandbox.
-        Supports: magic commands, !shell commands (rg, jq, grep, ls, cat, etc.),
-        %reset (wipe state), %restore (replay history), %view_output Cell_N.
-
-        Available libraries: requests, curl_cffi, beautifulsoup4, json, re, os, etc.
-        Working directory is the workspace root — use relative paths like
-        'session_dump/SUMMARY.json' to access recorded data.
-        """
+        """Run Python in a persistent IPython environment. State (vars, imports)
+        persists across calls. Magics: %reset, %restore, %view_output Cell_N."""
         sandbox = _get_sandbox()
         kwargs = {}
         if timeout is not None:
