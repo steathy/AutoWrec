@@ -75,6 +75,37 @@ regression suite that surfaced these defects).
   opaque strings.** Now mapped to JSON lists alongside `list`. Future
   CDP shape changes won't silently round-trip as `"(1, 2, 3)"`.
 
+### Changed (MCP tools — breaking)
+
+These changes shrink the per-call token footprint on the host AI by
+shifting from "always-verbose" to "opt-in to verbose". Existing AI
+prompts may need a one-line update.
+
+- **M1: `read_session_summary` defaults to a ~10-line digest.** Returns
+  duration, action / request counts, top 5 domains, auth-presence flag.
+  Pass `verbose=true` for the full SUMMARY.json. Typical reduction:
+  6 KB → ~400 B.
+- **M3 + M4: `read_transaction` reshaped.** Dropped the
+  `include_request_body` / `include_response_body` parameters — bodies
+  are no longer inlined. New `level` parameter: `"minimal"` (default,
+  ~200 B: method/url/status/timing/has_body), `"headers"` (adds req+res
+  headers), `"full"` (entire transaction.json). Read body content via
+  `read_file` on `request_folder + "/req_payload.<ext>"` /
+  `"/res_body.<ext>"` — the extension comes from
+  `request.content_detection.extension`.
+- **M5: `read_file` reshaped.** New `mode` parameter:
+  - `"stat"`: just `{path, size, ext}` — no content read.
+  - `"head"` (default): first 1 KB; binary returns a 64-byte hex
+    preview rather than a 4/3-expanded base64 blob.
+  - `"raw"`: today's behavior with `offset` / `limit` for pagination.
+- **M6: `extract_video_frames` defaults trimmed.** `num_frames` default
+  4 → 2. New `quality` parameter (`"low"` default, `"med"`, `"high"`).
+  Low quality is `scale=480:-1`, `-q:v 5` — about 8× smaller than the
+  former 1280-px / `-q:v 2` output.
+- **M8: `list_workspace_files` defaults trimmed.** `size` field is now
+  opt-in via `include_sizes=true`. Hidden (dot-prefix) entries are
+  excluded.
+
 ---
 
 ## [1.2.0] - 2026-05-02

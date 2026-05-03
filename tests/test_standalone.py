@@ -192,9 +192,18 @@ def run_tests():
         return tool_result.content[0].text
 
     async def test_workspace_tools():
+        # M1: lean digest by default, full SUMMARY.json with verbose=true
         try:
-            result = json.loads(_tool_text(await mcp.call_tool("read_session_summary", {})))
-            check("read_session_summary", "session" in result and "statistics" in result)
+            digest = json.loads(_tool_text(await mcp.call_tool("read_session_summary", {})))
+            check(
+                "read_session_summary lean digest",
+                "duration_s" in digest and "requests" in digest and "verbose_available" in digest,
+            )
+            full = json.loads(_tool_text(await mcp.call_tool("read_session_summary", {"verbose": True})))
+            check(
+                "read_session_summary verbose=true",
+                "session" in full and "statistics" in full,
+            )
         except Exception as e:
             check("read_session_summary", False, str(e))
 
@@ -205,25 +214,57 @@ def run_tests():
         except Exception as e:
             check("read_timeline", False, str(e))
 
+        # M3 + M4: read_transaction returns metadata only (no body inlining).
         try:
-            result = json.loads(_tool_text(await mcp.call_tool("read_transaction", {
+            minimal = json.loads(_tool_text(await mcp.call_tool("read_transaction", {
                 "request_folder": "requests/000_GET_example.com",
-                "include_response_body": True,
             })))
-            check("read_transaction with body", "Hello World" in result.get("response_body", ""))
+            check(
+                "read_transaction default level=minimal",
+                "method" in minimal and "url" in minimal and "request_body" not in minimal,
+            )
+            full = json.loads(_tool_text(await mcp.call_tool("read_transaction", {
+                "request_folder": "requests/000_GET_example.com",
+                "level": "full",
+            })))
+            check(
+                "read_transaction level=full keeps metadata, no inline body",
+                "metadata" in full and "request_body" not in full,
+            )
         except Exception as e:
             check("read_transaction", False, str(e))
 
+        # M8: list_workspace_files no longer includes sizes by default.
         try:
             result = json.loads(_tool_text(await mcp.call_tool("list_workspace_files", {})))
             names = {e["name"] for e in result["entries"]}
             check("list_workspace_files", "SUMMARY.json" in names and "requests" in names)
+            check(
+                "list_workspace_files default omits size field",
+                all("size" not in e for e in result["entries"]),
+            )
+            with_sizes = json.loads(_tool_text(await mcp.call_tool(
+                "list_workspace_files", {"include_sizes": True}
+            )))
+            check(
+                "list_workspace_files include_sizes=true adds sizes",
+                any("size" in e for e in with_sizes["entries"]),
+            )
         except Exception as e:
             check("list_workspace_files", False, str(e))
 
+        # M5: read_file default mode is 'head'; raw mode for full read.
         try:
-            result = json.loads(_tool_text(await mcp.call_tool("read_file", {"path": "SUMMARY.json"})))
-            check("read_file", result["encoding"] == "utf-8" and result["size"] > 0)
+            head = json.loads(_tool_text(await mcp.call_tool("read_file", {"path": "SUMMARY.json"})))
+            check("read_file default mode=head", head["encoding"] == "utf-8" and head["size"] > 0)
+            stat = json.loads(_tool_text(await mcp.call_tool(
+                "read_file", {"path": "SUMMARY.json", "mode": "stat"}
+            )))
+            check("read_file mode=stat returns metadata only", "size" in stat and "content" not in stat)
+            raw = json.loads(_tool_text(await mcp.call_tool(
+                "read_file", {"path": "SUMMARY.json", "mode": "raw", "limit": 9999}
+            )))
+            check("read_file mode=raw honors offset/limit", raw["bytes_read"] > 0)
         except Exception as e:
             check("read_file", False, str(e))
 
@@ -233,7 +274,6 @@ def run_tests():
         except (ValueError, FileNotFoundError):
             check("read_file blocks traversal", True)
         except Exception as e:
-            # FastMCP may wrap the error — check the message
             check("read_file blocks traversal", "traversal" in str(e).lower() or "not found" in str(e).lower(), str(e))
 
     asyncio.run(test_workspace_tools())
@@ -472,9 +512,11 @@ def run_tests():
         except Exception as e:
             check("read_timeline negative offset clamped", False, str(e))
 
-        # read_file with negative limit should not crash
+        # read_file with negative limit (raw mode) should not crash
         try:
-            result = json.loads(_tool_text(await mcp.call_tool("read_file", {"path": "test.txt", "limit": -1})))
+            result = json.loads(_tool_text(await mcp.call_tool(
+                "read_file", {"path": "test.txt", "mode": "raw", "limit": -1}
+            )))
             check("read_file negative limit clamped", result["bytes_read"] > 0)
         except Exception as e:
             check("read_file negative limit clamped", False, str(e))
@@ -504,8 +546,10 @@ def run_tests():
     _mcp_state["workspace"] = None
 
     # ─────────────────────────────────────────────────────────────────────────
-    section("12. Binary Transaction Body Encoding")
+    section("12. Binary body via read_file base64 (post-M4)")
     # ─────────────────────────────────────────────────────────────────────────
+    # Bodies are no longer inlined into read_transaction; the AI must call
+    # read_file in 'raw' mode for the actual body content.
 
     bin_workspace = tempfile.mkdtemp(prefix="autowrec_bin_")
     bin_session = os.path.join(bin_workspace, "session_dump")
@@ -513,7 +557,10 @@ def run_tests():
     os.makedirs(tx_dir_bin)
 
     with open(os.path.join(tx_dir_bin, "transaction.json"), "w") as f:
-        json.dump({"metadata": {"method": "GET", "url": "https://example.com"}}, f)
+        json.dump({
+            "metadata": {"method": "GET", "url": "https://example.com"},
+            "response": {"has_body": True, "content_detection": {"extension": "bin"}},
+        }, f)
     with open(os.path.join(tx_dir_bin, "res_body.bin"), "wb") as f:
         f.write(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")  # binary PNG header
 
@@ -521,13 +568,18 @@ def run_tests():
 
     async def test_binary_body():
         try:
-            result = json.loads(_tool_text(await mcp.call_tool("read_transaction", {
-                "request_folder": "requests/000_GET_example.com",
-                "include_response_body": True,
-            })))
-            check("binary body returns base64", result.get("response_body_encoding") == "base64")
+            tx = json.loads(_tool_text(await mcp.call_tool(
+                "read_transaction",
+                {"request_folder": "requests/000_GET_example.com", "level": "full"},
+            )))
+            check("transaction reports has_body=true", tx["response"]["has_body"] is True)
+            body = json.loads(_tool_text(await mcp.call_tool(
+                "read_file",
+                {"path": "requests/000_GET_example.com/res_body.bin", "mode": "raw"},
+            )))
+            check("binary body via read_file uses base64", body["encoding"] == "base64")
         except Exception as e:
-            check("binary body returns base64", False, str(e))
+            check("binary body via read_file", False, str(e))
 
     asyncio.run(test_binary_body())
     shutil.rmtree(bin_workspace, ignore_errors=True)

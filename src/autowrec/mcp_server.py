@@ -18,7 +18,7 @@ import json
 import os
 import subprocess
 import threading
-from typing import Annotated
+from typing import Annotated, Literal
 
 
 def _build_server():
@@ -169,20 +169,47 @@ def _build_server():
         return "Recording finished but no workspace was produced."
 
     @mcp.tool()
-    def read_session_summary() -> str:
-        """Read the SUMMARY.json from the recorded session.
-        Contains: session metadata, session_flow (chronological summaries of user
-        actions with timestamps), and statistics (request counts, domain breakdown,
-        status codes, auth/cookie counts).
-
-        Recommended first tool to call after recording a session.
+    def read_session_summary(
+        verbose: Annotated[bool, "Return the full SUMMARY.json (default: ~10-line digest)"] = False,
+    ) -> str:
+        """Lean digest of the recorded session: counts, top domains, auth presence.
+        Pass verbose=true for the full SUMMARY.json (statistics, session_flow, etc).
+        Recommended first tool to call after a recording.
         """
         workspace = _get_workspace()
         summary_path = os.path.join(workspace, "SUMMARY.json")
         if not os.path.exists(summary_path):
             raise FileNotFoundError(f"SUMMARY.json not found at {summary_path}")
+
+        if verbose:
+            with open(summary_path, encoding="utf-8") as f:
+                return f.read()
+
+        # Lean digest mode — extract just the high-signal fields.
         with open(summary_path, encoding="utf-8") as f:
-            return f.read()
+            data = json.load(f)
+
+        sess = data.get("session") or {}
+        stats = data.get("statistics") or {}
+        domains = stats.get("domains") or {}
+        top_domains = sorted(domains.items(), key=lambda kv: -kv[1])[:5]
+
+        digest = {
+            "duration_s": sess.get("duration_seconds"),
+            "actions": stats.get("total_actions", 0),
+            "requests": {
+                "total": stats.get("total_requests", 0),
+                "actionable": sess.get("actionable_requests", 0),
+                "redirected": sess.get("redirected_requests", 0),
+                "failed": sess.get("failed_requests", 0),
+            },
+            "top_domains": [{"domain": d, "count": c} for d, c in top_domains],
+            "auth_present": (stats.get("with_auth", 0) or 0) > 0,
+            "cookies_present": (stats.get("with_cookies", 0) or 0) > 0,
+            "session_flow_count": len(data.get("session_flow") or []),
+            "verbose_available": True,
+        }
+        return json.dumps(digest, separators=(",", ":"))
 
     @mcp.tool()
     def read_timeline(
@@ -209,13 +236,15 @@ def _build_server():
     @mcp.tool()
     def read_transaction(
         request_folder: Annotated[str, "Folder path from timeline, e.g. 'requests/003_GET_api.example.com'"],
-        include_request_body: Annotated[bool, "Include the request payload content"] = False,
-        include_response_body: Annotated[bool, "Include the response body content"] = False,
+        level: Annotated[
+            Literal["minimal", "headers", "full"],
+            "minimal: method/url/status/timing/has_body. headers: + req+res headers. full: + cookies, detection.",
+        ] = "minimal",
     ) -> str:
-        """Read a specific HTTP transaction from the session dump.
-        Returns transaction.json (metadata, headers, cookies, timing, security flags).
-        Optionally includes request payload and response body content.
-        Bodies capped at 100KB — use read_file for full content with pagination.
+        """Inspect a single HTTP transaction.
+        Body content is NOT inlined — call read_file on
+        request_folder + '/req_payload.<ext>' or '/res_body.<ext>' for it.
+        The extension is in request.content_detection.extension.
         """
         workspace = _get_workspace()
         folder_path = _safe_resolve(workspace, request_folder)
@@ -225,66 +254,49 @@ def _build_server():
             raise FileNotFoundError(f"transaction.json not found in {request_folder}")
 
         with open(tx_path, encoding="utf-8") as f:
-            result = json.load(f)
+            data = json.load(f)
 
-        max_body_size = 100_000
+        meta = data.get("metadata") or {}
+        req = data.get("request") or {}
+        res = data.get("response") or {}
 
-        def _read_body(file_path, max_size):
-            size = os.path.getsize(file_path)
-            with open(file_path, "rb") as f:
-                raw = f.read(max_size)
-            try:
-                return {"content": raw.decode("utf-8"), "truncated": size > max_size}
-            except UnicodeDecodeError:
-                return {
-                    "content": base64.b64encode(raw).decode("ascii"),
-                    "encoding": "base64",
-                    "truncated": size > max_size,
-                }
+        if level == "minimal":
+            timing = meta.get("timing") or {}
+            slim = {
+                "method": meta.get("method"),
+                "url": meta.get("url"),
+                "status": meta.get("status"),
+                "duration_ms": timing.get("duration_ms"),
+                "has_payload": req.get("has_payload", False),
+                "has_body": res.get("has_body", False),
+                "security": meta.get("security"),
+            }
+            return json.dumps(slim, separators=(",", ":"))
 
-        def _pick_body_file(folder, prefix, detection):
-            """Pick the body file matching the detected extension.
-            Falls back to alphabetic-first if there's no detection metadata."""
-            candidates = sorted(f for f in os.listdir(folder) if f.startswith(prefix))
-            if not candidates:
-                return None
-            if detection and isinstance(detection, dict):
-                ext = detection.get("extension")
-                if ext:
-                    for c in candidates:
-                        if c.endswith(f".{ext}"):
-                            return c
-            return candidates[0]
+        if level == "headers":
+            slim = {
+                "metadata": meta,
+                "request": {
+                    "headers": req.get("headers"),
+                    "has_payload": req.get("has_payload", False),
+                },
+                "response": {
+                    "headers": res.get("headers"),
+                    "has_body": res.get("has_body", False),
+                },
+            }
+            return json.dumps(slim, separators=(",", ":"))
 
-        req_detection = (result.get("request") or {}).get("content_detection")
-        res_detection = (result.get("response") or {}).get("content_detection")
-
-        if include_request_body:
-            chosen = _pick_body_file(folder_path, "req_payload", req_detection)
-            if chosen:
-                body = _read_body(os.path.join(folder_path, chosen), max_body_size)
-                result["request_body"] = body["content"]
-                result["request_body_truncated"] = body["truncated"]
-                if "encoding" in body:
-                    result["request_body_encoding"] = body["encoding"]
-
-        if include_response_body:
-            chosen = _pick_body_file(folder_path, "res_body", res_detection)
-            if chosen:
-                body = _read_body(os.path.join(folder_path, chosen), max_body_size)
-                result["response_body"] = body["content"]
-                result["response_body_truncated"] = body["truncated"]
-                if "encoding" in body:
-                    result["response_body_encoding"] = body["encoding"]
-
-        return json.dumps(result, indent=2)
+        # full: return the entire transaction.json (still no body content)
+        return json.dumps(data, separators=(",", ":"))
 
     @mcp.tool()
     def list_workspace_files(
         subdirectory: Annotated[str, "Subdirectory relative to session_dump (e.g. 'requests')"] = "",
+        include_sizes: Annotated[bool, "Include file sizes in the response (off by default)"] = False,
     ) -> str:
-        """List files and directories in the session workspace.
-        With no argument, lists top-level session_dump contents.
+        """List entries in the workspace. Hidden (dot-prefix) files are excluded.
+        Pass include_sizes=true if you actually need byte counts.
         """
         workspace = _get_workspace()
         target = _safe_resolve(workspace, subdirectory) if subdirectory else workspace
@@ -294,21 +306,30 @@ def _build_server():
 
         entries = []
         for entry in sorted(os.scandir(target), key=lambda e: e.name):
+            if entry.name.startswith("."):
+                continue
             info = {"name": entry.name, "type": "dir" if entry.is_dir() else "file"}
-            if entry.is_file():
+            if include_sizes and entry.is_file():
                 info["size"] = entry.stat().st_size
             entries.append(info)
 
-        return json.dumps({"path": subdirectory or ".", "entries": entries}, indent=2)
+        return json.dumps(
+            {"path": subdirectory or ".", "entries": entries}, separators=(",", ":")
+        )
 
     @mcp.tool()
     def read_file(
         path: Annotated[str, "File path relative to session_dump directory"],
-        offset: Annotated[int, "Byte offset to start reading from"] = 0,
-        limit: Annotated[int, "Maximum bytes to read (default 50KB)"] = 50_000,
+        mode: Annotated[
+            Literal["stat", "head", "raw"],
+            "stat: just metadata. head: first 1KB only (binary -> hex preview). raw: full read with offset/limit.",
+        ] = "head",
+        offset: Annotated[int, "Byte offset (raw mode only)"] = 0,
+        limit: Annotated[int, "Max bytes to read in raw mode (default 50KB)"] = 50_000,
     ) -> str:
-        """Read any file from the session workspace by relative path.
-        Text files returned as UTF-8, binary as base64. Use offset/limit for large files.
+        """Read a file from the workspace.
+        Default 'head' mode returns the first 1KB (binary as hex preview).
+        Use 'stat' for metadata only, 'raw' with offset/limit for full content.
         """
         offset = max(0, offset)
         limit = max(1, min(limit, 1_000_000))
@@ -320,6 +341,37 @@ def _build_server():
 
         size = os.path.getsize(file_path)
 
+        if mode == "stat":
+            return json.dumps(
+                {"path": path, "size": size, "ext": os.path.splitext(path)[1].lstrip(".")},
+                separators=(",", ":"),
+            )
+
+        if mode == "head":
+            head_size = min(1024, size)
+            with open(file_path, "rb") as f:
+                raw = f.read(head_size)
+            try:
+                content = raw.decode("utf-8")
+                encoding = "utf-8"
+            except UnicodeDecodeError:
+                # 64-byte hex preview is much smaller than base64 in tokens.
+                preview = raw[:64].hex()
+                content = preview + ("..." if len(raw) > 64 else "")
+                encoding = "hex-preview"
+            return json.dumps(
+                {
+                    "content": content,
+                    "encoding": encoding,
+                    "size": size,
+                    "bytes_read": len(raw),
+                    "has_more": len(raw) < size,
+                    "hint": "Call again with mode='raw' for the full file.",
+                },
+                separators=(",", ":"),
+            )
+
+        # raw mode
         with open(file_path, "rb") as f:
             if offset:
                 f.seek(offset)
@@ -341,17 +393,21 @@ def _build_server():
                 "bytes_read": len(raw),
                 "has_more": offset + len(raw) < size,
             },
-            indent=2,
+            separators=(",", ":"),
         )
 
     @mcp.tool()
     def extract_video_frames(
         clip_path: Annotated[str, "Path to video clip relative to session_dump (e.g. 'clips/action_clip_000.mp4')"],
-        num_frames: Annotated[int, "Number of evenly-spaced frames to extract"] = 4,
+        num_frames: Annotated[int, "Evenly-spaced frames to extract (1-12)"] = 2,
+        quality: Annotated[
+            Literal["low", "med", "high"],
+            "low (480px, ~10KB/frame), med (720px, ~30KB/frame), high (1280px, ~80KB/frame)",
+        ] = "low",
     ) -> str:
-        """Extract JPEG frames from a video clip as base64-encoded images.
-        Use this to visually inspect what happened during a recorded action.
-        The frames are evenly spaced across the clip duration.
+        """Sample JPEG frames from a video clip as base64 images.
+        Defaults are tuned for token efficiency — bump quality / num_frames
+        only when you need detail.
         """
         num_frames = max(1, min(num_frames, 12))
         workspace = _get_workspace()
@@ -363,6 +419,12 @@ def _build_server():
         import imageio_ffmpeg
 
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+
+        scale, qv = {
+            "low": ("scale=480:-1", "5"),
+            "med": ("scale=720:-1", "4"),
+            "high": ("scale=1280:-1", "2"),
+        }[quality]
 
         probe_cmd = [
             ffmpeg_exe, "-i", video_path,
@@ -404,8 +466,8 @@ def _build_server():
                 "-ss", str(t),
                 "-i", video_path,
                 "-vframes", "1",
-                "-vf", "scale=1280:-1",
-                "-q:v", "2",
+                "-vf", scale,
+                "-q:v", qv,
                 "-f", "image2",
                 "-c:v", "mjpeg",
                 "pipe:1",
@@ -421,10 +483,11 @@ def _build_server():
             {
                 "clip": clip_path,
                 "duration_seconds": round(duration, 2),
+                "quality": quality,
                 "frames_extracted": len(frames),
                 "frames": [f"data:image/jpeg;base64,{f}" for f in frames],
             },
-            indent=2,
+            separators=(",", ":"),
         )
 
     @mcp.tool()

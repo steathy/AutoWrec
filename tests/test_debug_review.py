@@ -264,10 +264,11 @@ def main():
         shutil.rmtree(test_workspace, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────
-    section("4. read_transaction picks body by detection.extension (post-B7)")
+    section("4. read_transaction surfaces detection.extension (post-B7+M3)")
     # ─────────────────────────────────────────────────────────────────────
-    # When transaction.json carries content_detection.extension, the matching
-    # file must be picked even if alphabetic ordering would prefer another.
+    # Post-M3 read_transaction no longer inlines bodies. We verify the
+    # 'full' level surfaces content_detection.extension so the host AI can
+    # pick the right body file when calling read_file.
 
     ws = tempfile.mkdtemp(prefix="autowrec_tx_")
     sd = os.path.join(ws, "session_dump")
@@ -276,7 +277,7 @@ def main():
     with open(os.path.join(folder, "transaction.json"), "w") as f:
         json.dump({
             "metadata": {"method": "POST"},
-            "request": {"content_detection": {"extension": "json"}},
+            "request": {"content_detection": {"extension": "json"}, "has_payload": True},
             "response": {},
         }, f)
     with open(os.path.join(folder, "req_payload.json"), "w") as f:
@@ -290,13 +291,25 @@ def main():
         st["workspace"] = sd
         res = await m.call_tool(
             "read_transaction",
-            {"request_folder": "requests/000_POST_x", "include_request_body": True},
+            {"request_folder": "requests/000_POST_x", "level": "full"},
         )
-        return json.loads(res.content[0].text).get("request_body", "")
+        full = json.loads(res.content[0].text)
+        # AI then calls read_file on the matching file
+        ext = (full.get("request") or {}).get("content_detection", {}).get("extension")
+        body_res = await m.call_tool(
+            "read_file",
+            {"path": f"requests/000_POST_x/req_payload.{ext}", "mode": "raw"},
+        )
+        return ext, json.loads(body_res.content[0].text).get("content", "")
 
-    body = asyncio.run(t())
+    ext, body = asyncio.run(t())
     check(
-        "B7: detection.extension='json' picks .json over alphabetic .bin",
+        "B7+M3: full transaction surfaces detection.extension='json'",
+        ext == "json",
+        f"got ext={ext!r}",
+    )
+    check(
+        "M4: AI uses read_file to fetch the JSON body matching that extension",
         '"primary"' in body,
         f"got body={body!r}",
     )
@@ -533,8 +546,9 @@ def main():
     )
 
     # ─────────────────────────────────────────────────────────────────────
-    section("11. read_file with offset > size")
+    section("11. read_file raw mode with offset > size (post-M5)")
     # ─────────────────────────────────────────────────────────────────────
+    # offset only applies in raw mode; head mode ignores offset.
     rf = tempfile.mkdtemp(prefix="autowrec_rf_")
     sd = os.path.join(rf, "session_dump")
     os.makedirs(sd)
@@ -544,11 +558,13 @@ def main():
     async def rf_test():
         m, st, _ = _build_server()
         st["workspace"] = sd
-        res = await m.call_tool("read_file", {"path": "small.txt", "offset": 9999})
+        res = await m.call_tool(
+            "read_file", {"path": "small.txt", "mode": "raw", "offset": 9999}
+        )
         return json.loads(res.content[0].text)
 
     obj = asyncio.run(rf_test())
-    check("read_file beyond EOF returns 0 bytes",
+    check("read_file raw mode beyond EOF returns 0 bytes",
           obj["bytes_read"] == 0 and obj["has_more"] is False,
           f"got {obj}")
     shutil.rmtree(rf, ignore_errors=True)
@@ -625,6 +641,163 @@ def main():
         cfg2.CONFIG_FILE = saved_cf
         cfg2.OUTPUT_DIR = saved_od
         shutil.rmtree(badd, ignore_errors=True)
+
+    # ─────────────────────────────────────────────────────────────────────
+    section("M. MCP token-budget acceptance (post-M1/M3/M4/M5/M6/M8)")
+    # ─────────────────────────────────────────────────────────────────────
+    # Build a fixture session with ~200 transactions and assert each tool's
+    # default response stays under the v1.3 token budget. Compare to the
+    # rough v1.2 sizes for context.
+
+    fixture_ws = tempfile.mkdtemp(prefix="autowrec_tokens_")
+    fixture_sd = os.path.join(fixture_ws, "session_dump")
+    os.makedirs(os.path.join(fixture_sd, "requests"))
+
+    domains = [f"d{i}.example.com" for i in range(20)]
+    summary_payload = {
+        "session": {
+            "duration_seconds": 312.4,
+            "actionable_requests": 88,
+            "redirected_requests": 12,
+            "failed_requests": 3,
+        },
+        "session_flow": [
+            {"timestamp_iso": f"2026-05-03T00:0{i}:00", "summary": f"User did action {i}"}
+            for i in range(8)
+        ],
+        "statistics": {
+            "total_requests": 220,
+            "total_actions": 47,
+            "domains": {d: 10 + i for i, d in enumerate(domains)},
+            "status_codes": {"200": 200, "302": 12, "404": 5, "500": 3},
+            "with_auth": 22,
+            "with_cookies": 60,
+            "methods": {"GET": 180, "POST": 30, "PUT": 5, "DELETE": 5},
+        },
+    }
+    with open(os.path.join(fixture_sd, "SUMMARY.json"), "w", encoding="utf-8") as f:
+        json.dump(summary_payload, f, indent=2)
+
+    timeline_events = []
+    for i in range(200):
+        timeline_events.append({
+            "timestamp": float(i),
+            "timestamp_iso": f"2026-05-03T00:00:{i % 60:02d}",
+            "event_type": "network_request",
+            "method": "GET",
+            "url": f"https://{domains[i % len(domains)]}/path/{i}",
+            "status": 200,
+            "folder": f"requests/{i:03d}_GET_{domains[i % len(domains)]}",
+        })
+    with open(os.path.join(fixture_sd, "timeline.json"), "w", encoding="utf-8") as f:
+        json.dump(timeline_events, f)
+
+    big_headers = {f"x-header-{j}": f"value-{j}" * 4 for j in range(20)}
+    big_tx_folder = os.path.join(fixture_sd, "requests", "000_GET_d0.example.com")
+    os.makedirs(big_tx_folder)
+    with open(os.path.join(big_tx_folder, "transaction.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "metadata": {
+                "index": 0, "method": "GET", "url": "https://d0.example.com/path/0",
+                "status": 200,
+                "timing": {"duration_ms": 123.45},
+                "security": {"has_authorization": True, "has_proxy_authorization": False, "has_challenge": False},
+            },
+            "request": {
+                "headers": big_headers,
+                "cookies_sent": ["sid", "csrf", "lang"],
+                "cookies_sent_detailed": [{"cookie": {"name": "sid", "value": "x" * 80}} for _ in range(8)],
+                "content_detection": None,
+                "has_payload": False,
+            },
+            "response": {
+                "headers": big_headers,
+                "cookies_set": ["server_session"],
+                "cookies_set_detailed": {"blocked": [], "exempted": []},
+                "content_detection": {"extension": "json", "mime_type": "application/json"},
+                "has_body": True,
+                "mime_mismatch": False,
+            },
+        }, f, indent=2)
+
+    # 200 entries in workspace (just SUMMARY.json + timeline.json + 1 folder),
+    # so simulate the realistic case by listing the requests folder which has
+    # many request folders. Create 200 empty request folders.
+    for i in range(1, 200):
+        os.makedirs(os.path.join(fixture_sd, "requests", f"{i:03d}_GET_d{i % 20}.example.com"))
+
+    async def run_token_tests():
+        m, st, _ = _build_server()
+        st["workspace"] = fixture_sd
+
+        digest = (await m.call_tool("read_session_summary", {})).content[0].text
+        check("M1: lean summary <= 500 B", len(digest) <= 500, f"got {len(digest)} B")
+
+        verbose = (await m.call_tool(
+            "read_session_summary", {"verbose": True}
+        )).content[0].text
+        check("M1: verbose summary still works", "statistics" in verbose)
+
+        timeline_resp = (await m.call_tool(
+            "read_timeline", {"offset": 0, "limit": 50}
+        )).content[0].text
+        # M2 (caching + summary mode) is in the next commit; current default is
+        # still full event payloads. Just record the size as a baseline so the
+        # M2 follow-up can demonstrate improvement.
+        print(f"    timeline(limit=50) size: {len(timeline_resp):,} B (M2 target: <=4 KB)")
+
+        tx = (await m.call_tool(
+            "read_transaction",
+            {"request_folder": "requests/000_GET_d0.example.com"},
+        )).content[0].text
+        check("M3: minimal transaction <= 300 B", len(tx) <= 300, f"got {len(tx)} B")
+
+        tx_full = (await m.call_tool(
+            "read_transaction",
+            {"request_folder": "requests/000_GET_d0.example.com", "level": "full"},
+        )).content[0].text
+        check(
+            "M4: full transaction does NOT inline body content",
+            '"request_body"' not in tx_full and '"response_body"' not in tx_full,
+        )
+
+        files = (await m.call_tool("list_workspace_files", {"subdirectory": "requests"})).content[0].text
+        # The 200 folder names use the descriptive "<idx>_GET_<host>" form; per
+        # entry that's ~30 chars of payload, so 200 entries naturally land at
+        # ~10 KB even with sizes/indent stripped. The relevant comparison is
+        # vs. the v1.2 path (indent=2 + sizes) which exceeds ~19 KB.
+        check(
+            "M8: list_workspace_files <= 10 KB for 200-entry dir (~50% of v1.2)",
+            len(files) <= 10_000,
+            f"got {len(files)} B",
+        )
+        files_payload = json.loads(files)
+        check(
+            "M8: default response omits 'size' field",
+            all("size" not in e for e in files_payload["entries"]),
+        )
+
+        files_with_sizes = (await m.call_tool(
+            "list_workspace_files", {"subdirectory": "requests", "include_sizes": True}
+        )).content[0].text
+        with_sizes_payload = json.loads(files_with_sizes)
+        # 200 entries are dirs → no size field added. Verify the API works.
+        check(
+            "M8: include_sizes=true is accepted",
+            len(with_sizes_payload["entries"]) == len(files_payload["entries"]),
+        )
+
+        head = (await m.call_tool(
+            "read_file", {"path": "SUMMARY.json"}
+        )).content[0].text
+        check("M5: read_file default head mode <= 1.5 KB", len(head) <= 1500, f"got {len(head)} B")
+        stat = (await m.call_tool(
+            "read_file", {"path": "SUMMARY.json", "mode": "stat"}
+        )).content[0].text
+        check("M5: stat mode <= 200 B", len(stat) <= 200, f"got {len(stat)} B")
+
+    asyncio.run(run_token_tests())
+    shutil.rmtree(fixture_ws, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────
     section("16. Cached binary re-verification on startup (post-B3)")
