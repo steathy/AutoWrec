@@ -60,7 +60,8 @@ class BrowserAgent:
         self.captured_requests = []
         self.captured_actions = []
         self.active_map = {}
-        self.orphan_extra_info = {}
+        self.orphan_extra_info: OrderedDict[str, dict] = OrderedDict()
+        self._ORPHAN_LRU_MAX = 4096
         self._streamed_bodies: dict[str, list[bytes]] = {}  # request_id -> list of raw chunks
         self._request_tab: dict = {}  # request_id -> tab session for correct CDP calls
         # Bounded LRU of request_ids we've decided to skip (data: URIs, blocklist
@@ -375,6 +376,8 @@ class BrowserAgent:
         else:
             if event.request_id not in self.orphan_extra_info:
                 self.orphan_extra_info[event.request_id] = {}
+                if len(self.orphan_extra_info) > self._ORPHAN_LRU_MAX:
+                    self.orphan_extra_info.popitem(last=False)
             self.orphan_extra_info[event.request_id]["sent"] = cookies
 
     async def res_extra_info(self, event: cdp.network.ResponseReceivedExtraInfo):
@@ -391,6 +394,8 @@ class BrowserAgent:
         else:
             if event.request_id not in self.orphan_extra_info:
                 self.orphan_extra_info[event.request_id] = {}
+                if len(self.orphan_extra_info) > self._ORPHAN_LRU_MAX:
+                    self.orphan_extra_info.popitem(last=False)
             self.orphan_extra_info[event.request_id]["received"] = cookie_data
             self.orphan_extra_info[event.request_id]["raw_headers"] = headers
 

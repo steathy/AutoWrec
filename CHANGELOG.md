@@ -6,6 +6,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.3.2] — 2026-05-04
+
+Two follow-ups surfaced by an out-of-band code review pass against the
+v1.3.1 sandbox + browser agent. Both are real defects v1.3.1 missed.
+
+### Fixed (Critical)
+
+- **Sandbox queue could hang indefinitely when the worker died abruptly.**
+  When user code called `os._exit()` or triggered a C-extension
+  segfault, `multiprocessing.Queue.get(timeout=...)` stopped honoring
+  its timeout on Windows — observed wall-clock `sandbox.execute(...)`
+  hang of 80+ seconds despite a 5 s configured timeout. This was a
+  session-killer for any AI tool that triggered such a crash.
+
+  Fix: `_read_for_cell` now polls the result queue in 100 ms slices.
+  Each Empty-on-slice triggers a `process.is_alive()` check; if the
+  worker has died, the read raises `queue.Empty` immediately so the
+  existing hard-kill + restart path can recover. The same defensive
+  `is_alive()` check guards the soft-timeout `interrupt_process` call.
+  Verified: a `os._exit(0)` cell now resolves in ~1.8 s with clean
+  recovery on the next call.
+
+### Fixed
+
+- **`orphan_extra_info` could grow unbounded.** B1's `_skipped_ids`
+  LRU only catches blocked / data: requests where `RequestWillBeSent`
+  fired and was filtered. `RequestWillBeSentExtraInfo` events for
+  request_ids that *never* fire `WillBeSent` (aborted navigations,
+  browser-extension cancellations, CDP races) accumulated forever.
+  `orphan_extra_info` is now a 4096-entry LRU `OrderedDict` with FIFO
+  eviction, matching the `_skipped_ids` pattern.
+
+### Changed
+
+- **Soft-timeout log clarified.** When `_read_for_cell`'s polling
+  short-circuit fires due to a dead worker (rather than the nominal
+  timeout elapsing), the log now reads `"Worker died before {cell}
+  could respond. Recovering..."` instead of the misleading
+  `"Soft Timeout (Ns) reached..."`.
+
+---
+
 ## [1.3.1] — 2026-05-03
 
 Targeted follow-up to v1.3.0 addressing the "MCP needs 3 calls to wake

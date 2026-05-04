@@ -139,7 +139,14 @@ class AgentSandbox:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise queue.Empty
-            candidate = self.result_queue.get(timeout=remaining)
+            
+            try:
+                candidate = self.result_queue.get(timeout=min(0.1, remaining))
+            except queue.Empty:
+                if not self.process or not self.process.is_alive():
+                    raise queue.Empty
+                continue
+                
             if self._cancel_flag.is_set():
                 return candidate
             if candidate.get("cell_id") == cell_id:
@@ -207,8 +214,19 @@ class AgentSandbox:
                 status, code_exit, ret_val = "error", 1, "CancelledByUser"
                 logger.debug(f"[{cell_id}] — cancelled by user during queue wait.")
             else:
-                logger.warning(f"Soft Timeout ({timeout}s) reached for {cell_id}. Sending interrupt...")
-                interrupt_process(self.process, self.interrupt_event)
+                # Distinguish "worker died abruptly" from "still running but
+                # didn't answer in time" — the former exits via the polling
+                # short-circuit in _read_for_cell, often well before the
+                # nominal timeout.
+                if self.process and self.process.is_alive():
+                    logger.warning(
+                        f"Soft Timeout ({timeout}s) reached for {cell_id}. Sending interrupt..."
+                    )
+                    interrupt_process(self.process, self.interrupt_event)
+                else:
+                    logger.warning(
+                        f"Worker died before {cell_id} could respond. Recovering..."
+                    )
                 try:
                     res = self._read_for_cell(cell_id, 1.5)
                     if self._cancel_flag.is_set() or self.process is not original_process:

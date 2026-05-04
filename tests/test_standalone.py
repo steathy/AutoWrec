@@ -90,7 +90,7 @@ def run_tests():
 
     from autowrec import config
 
-    check("VERSION is set", config.VERSION == "1.3.1")
+    check("VERSION is set", config.VERSION == "1.3.2")
     check("FPS default", config.FPS == 3)
     check("SEGMENT_PAD_SECONDS default", config.SEGMENT_PAD_SECONDS == 2)
     check("SANDBOX_TIMEOUT_SECONDS default", config.SANDBOX_TIMEOUT_SECONDS == 60)

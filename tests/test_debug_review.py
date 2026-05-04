@@ -1052,6 +1052,85 @@ def main():
     )
 
     # ─────────────────────────────────────────────────────────────────────
+    section("Q. Worker hard-exit recovery (post-Gemini queue-hang fix)")
+    # ─────────────────────────────────────────────────────────────────────
+    # When user code calls os._exit() or causes a C-extension segfault, the
+    # worker process dies abruptly and the multiprocessing.Queue's underlying
+    # pipe is left in a state where get(timeout=...) blocks indefinitely on
+    # Windows. _read_for_cell now polls in 0.1s slices and bails on
+    # process.is_alive()==False, so the sandbox can hard-kill + recover.
+
+    sb_dir2 = tempfile.mkdtemp(prefix="autowrec_hardexit_")
+    sb2 = AgentSandbox(working_dir=sb_dir2, timeout_seconds=5)
+
+    t_start = time.perf_counter()
+    res_exit = sb2.execute("import os; os._exit(0)")
+    t_exit = time.perf_counter() - t_start
+    check(
+        "Q: os._exit(0) does not hang sandbox indefinitely",
+        t_exit < 30.0,
+        f"took {t_exit:.1f}s (was hanging >80s pre-fix)",
+    )
+    check(
+        "Q: hard-exit returns hard-timeout marker",
+        "HARD TIMEOUT" in res_exit or "Exit 124" in res_exit,
+        f"got: {res_exit[:160]!r}",
+    )
+
+    res_recovery = sb2.execute("print('alive after recovery')")
+    check(
+        "Q: sandbox recovers cleanly, next cell runs",
+        "alive after recovery" in res_recovery,
+        f"got: {res_recovery[:160]!r}",
+    )
+
+    sb2.close()
+    shutil.rmtree(sb_dir2, ignore_errors=True)
+
+    # ─────────────────────────────────────────────────────────────────────
+    section("L. orphan_extra_info LRU bound (post-Gemini leak fix)")
+    # ─────────────────────────────────────────────────────────────────────
+    # B1's _skipped_ids only catches blocked / data: requests where
+    # RequestWillBeSent fired and was filtered. extra_info events for
+    # request_ids that NEVER fire WillBeSent (aborted nav, extension
+    # cancellation, CDP races) accumulate forever without an LRU bound.
+
+    from autowrec.recorder.browser_agent import BrowserAgent as _BA
+
+    agent_l = _BA()
+
+    class _Cookie:
+        def to_json(self):
+            return {"cookie": {"name": "x", "value": "y"}}
+
+    class _ExtraEvent:
+        def __init__(self, rid):
+            self.request_id = rid
+            self.associated_cookies = [_Cookie()]
+
+    async def _flood_orphans():
+        for i in range(10_000):
+            await agent_l.req_extra_info(_ExtraEvent(f"orphan-{i}"))
+
+    asyncio.run(_flood_orphans())
+
+    cap = agent_l._ORPHAN_LRU_MAX
+    size = len(agent_l.orphan_extra_info)
+    check(
+        "L: orphan_extra_info bounded under 10k-event flood",
+        size <= cap,
+        f"got size={size}, cap={cap}",
+    )
+    check(
+        "L: oldest entries evicted (FIFO)",
+        "orphan-0" not in agent_l.orphan_extra_info,
+    )
+    check(
+        "L: newest entries retained",
+        "orphan-9999" in agent_l.orphan_extra_info,
+    )
+
+    # ─────────────────────────────────────────────────────────────────────
     section("17. sh.exe path independent of $PATH (post-B8)")
     # ─────────────────────────────────────────────────────────────────────
     # Check the worker derives sh_path from working_dir, not $PATH.
