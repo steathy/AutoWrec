@@ -560,6 +560,125 @@ def run_tests():
     _mcp_state["workspace"] = None
 
     # ─────────────────────────────────────────────────────────────────────────
+    section("13. Proxy Configuration")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    check("PROXY_URL default is None", cfg.PROXY_URL is None)
+
+    # Test env var override
+    saved_proxy = cfg.PROXY_URL
+    os.environ["AUTOWREC_PROXY"] = "http://test-proxy:8080"
+    try:
+        cfg.PROXY_URL = os.environ.get("AUTOWREC_PROXY")
+        check("PROXY_URL reads env var", cfg.PROXY_URL == "http://test-proxy:8080")
+    finally:
+        del os.environ["AUTOWREC_PROXY"]
+        cfg.PROXY_URL = saved_proxy
+
+    # Test TOML config
+    proxy_cfg_dir = tempfile.mkdtemp(prefix="autowrec_proxycfg_")
+    proxy_cfg_file = os.path.join(proxy_cfg_dir, "config.toml")
+    with open(proxy_cfg_file, "w") as f:
+        f.write('[proxy]\nurl = "http://toml-proxy:3128"\n')
+
+    saved_config_file = cfg.CONFIG_FILE
+    try:
+        cfg.CONFIG_FILE = Path(proxy_cfg_file)
+        cfg.PROXY_URL = None
+        cfg._load_config_toml()
+        check("PROXY_URL reads TOML", cfg.PROXY_URL == "http://toml-proxy:3128")
+    finally:
+        cfg.CONFIG_FILE = saved_config_file
+        cfg.PROXY_URL = saved_proxy
+    shutil.rmtree(proxy_cfg_dir, ignore_errors=True)
+
+    # Test env var beats TOML
+    proxy_cfg_dir2 = tempfile.mkdtemp(prefix="autowrec_proxycfg2_")
+    proxy_cfg_file2 = os.path.join(proxy_cfg_dir2, "config.toml")
+    with open(proxy_cfg_file2, "w") as f:
+        f.write('[proxy]\nurl = "http://toml-proxy:3128"\n')
+
+    os.environ["AUTOWREC_PROXY"] = "http://env-proxy:9090"
+    try:
+        cfg.CONFIG_FILE = Path(proxy_cfg_file2)
+        cfg.PROXY_URL = os.environ.get("AUTOWREC_PROXY")
+        cfg._load_config_toml()
+        check("env var beats TOML", cfg.PROXY_URL == "http://env-proxy:9090")
+    finally:
+        del os.environ["AUTOWREC_PROXY"]
+        cfg.CONFIG_FILE = saved_config_file
+        cfg.PROXY_URL = saved_proxy
+    shutil.rmtree(proxy_cfg_dir2, ignore_errors=True)
+
+    # Test credential parsing in BrowserAgent
+    from urllib.parse import urlparse
+    from autowrec.recorder.browser_agent import BrowserAgent
+
+    ba_noauth = BrowserAgent(proxy_url="http://proxy.example.com:8080")
+    check("proxy_url stored", ba_noauth.proxy_url == "http://proxy.example.com:8080")
+    check("no creds for unauthenticated proxy", ba_noauth._proxy_creds is None)
+
+    ba_auth = BrowserAgent(proxy_url="http://admin:s3cret@proxy.example.com:8080")
+    check("auth proxy creds parsed", ba_auth._proxy_creds == ("admin", "s3cret"))
+
+    ba_socks = BrowserAgent(proxy_url="socks5://127.0.0.1:1080")
+    check("socks5 proxy accepted", ba_socks.proxy_url == "socks5://127.0.0.1:1080")
+    check("socks5 no creds", ba_socks._proxy_creds is None)
+
+    # SOCKS5 with auth — credentials ignored with warning (B3)
+    ba_socks_auth = BrowserAgent(proxy_url="socks5://user:pass@127.0.0.1:1080")
+    check("socks5+auth: creds ignored", ba_socks_auth._proxy_creds is None)
+
+    # Bad proxy URL — silently falls back to no proxy (G1)
+    ba_bad = BrowserAgent(proxy_url="ftp://not-a-proxy:80")
+    check("bad scheme: proxy_url cleared", ba_bad.proxy_url is None)
+    ba_bad2 = BrowserAgent(proxy_url="http://")
+    check("missing hostname: proxy_url cleared", ba_bad2.proxy_url is None)
+
+    # Bad port (R3-B7)
+    ba_bad_port = BrowserAgent(proxy_url="http://proxy:abc")
+    check("bad port: proxy_url cleared", ba_bad_port.proxy_url is None)
+
+    # IPv6 netloc formatting (R3-B8)
+    ba_ipv6 = BrowserAgent(proxy_url="http://[::1]:8080")
+    check("IPv6 proxy accepted", ba_ipv6.proxy_url == "http://[::1]:8080")
+    check("IPv6 netloc re-brackets", BrowserAgent._proxy_netloc(urlparse("http://[::1]:8080")) == "[::1]:8080")
+
+    # MCP record_session has proxy param (R3-G6)
+    async def check_proxy_param():
+        tools = await mcp.list_tools()
+        rs_tool = next(t for t in tools if t.name == "record_session")
+        schema = rs_tool.inputSchema if hasattr(rs_tool, 'inputSchema') else rs_tool.parameters
+        props = schema.get("properties", {})
+        check("MCP record_session has proxy param", "proxy" in props)
+    asyncio.run(check_proxy_param())
+
+    # MCP proxy override scoped and restored (R4-G10, R5-B11)
+    seen_proxy = {}
+    def fake_run_recording(url="about:blank"):
+        seen_proxy["value"] = cfg.PROXY_URL
+        return False
+
+    saved_proxy_g10 = cfg.PROXY_URL
+    try:
+        cfg.PROXY_URL = "http://default-proxy:8080"
+        from unittest.mock import patch
+        with patch("autowrec.recorder.run_recording", side_effect=fake_run_recording):
+            from autowrec.mcp_server import _build_server as _bs2
+            mcp2, state2, _ = _bs2()
+
+            async def test_proxy_scoping():
+                await mcp2.call_tool("record_session", {"url": "about:blank", "proxy": "http://scoped-proxy:8080"})
+                thread = state2.get("recording_thread")
+                if thread:
+                    thread.join(timeout=5)
+            asyncio.run(test_proxy_scoping())
+        check("MCP proxy seen by background recording", seen_proxy.get("value") == "http://scoped-proxy:8080")
+        check("MCP proxy restored after recording", cfg.PROXY_URL == "http://default-proxy:8080")
+    finally:
+        cfg.PROXY_URL = saved_proxy_g10
+
+    # ─────────────────────────────────────────────────────────────────────────
     section("RESULTS")
     # ─────────────────────────────────────────────────────────────────────────
 

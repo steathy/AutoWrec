@@ -1068,6 +1068,111 @@ def main():
     )
 
     # ─────────────────────────────────────────────────────────────────────
+    section("18. Proxy auth handler (CDP Fetch)")
+    # ─────────────────────────────────────────────────────────────────────
+    from autowrec.recorder.browser_agent import BrowserAgent
+
+    # Verify _proxy_creds parsing (percent-decoded)
+    ba = BrowserAgent(proxy_url="http://alice:p%40ss@proxy.test:3128")
+    check(
+        "proxy creds: username parsed",
+        ba._proxy_creds is not None and ba._proxy_creds[0] == "alice",
+    )
+    check(
+        "proxy creds: password percent-decoded",
+        ba._proxy_creds is not None and ba._proxy_creds[1] == "p@ss",
+    )
+
+    # Verify clean proxy URL strips credentials
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse("http://alice:secret@proxy.test:3128")
+    clean = urlunparse((parsed.scheme, BrowserAgent._proxy_netloc(parsed), "", "", "", ""))
+    check(
+        "clean proxy URL strips user:pass",
+        "alice" not in clean and "secret" not in clean,
+        f"got {clean}",
+    )
+    check(
+        "clean proxy URL keeps host:port",
+        "proxy.test:3128" in clean,
+        f"got {clean}",
+    )
+
+    # Verify no creds for socks5 (unauthenticated)
+    ba_s5 = BrowserAgent(proxy_url="socks5://proxy.test:1080")
+    check("socks5: no _proxy_creds", ba_s5._proxy_creds is None)
+
+    # Verify socks5+auth credentials are ignored (B3)
+    ba_s5a = BrowserAgent(proxy_url="socks5://user:pass@proxy.test:1080")
+    check("socks5+auth: creds ignored, no Fetch overhead", ba_s5a._proxy_creds is None)
+
+    # Verify Fetch.enable uses patterns=[] and is guarded by _proxy_creds
+    import autowrec.recorder.browser_agent as ba_mod
+    ba_src = inspect.getsource(ba_mod)
+    check(
+        "Fetch.enable guarded by _proxy_creds check",
+        "if self._proxy_creds:" in ba_src and "cdp.fetch.enable" in ba_src,
+    )
+    check(
+        "Fetch.enable passes patterns=[] (R3-B5)",
+        "patterns=[]" in ba_src,
+    )
+    check(
+        "auth handler filters by source=='Proxy' (R3-B6)",
+        '"Proxy"' in ba_src and "auth_challenge" in ba_src and "source" in ba_src,
+    )
+
+    # Behavioral test: auth handler routes by challenge source (R4-G11, R5-B12)
+    from dataclasses import dataclass
+    from typing import Any
+    from zendriver.cdp.fetch import RequestId
+
+    @dataclass
+    class FakeAuthChallenge:
+        origin: str = "proxy.test"
+        scheme: str = "basic"
+        realm: str = "proxy"
+        source: str | None = None
+
+    @dataclass
+    class FakeAuthEvent:
+        request_id: RequestId = RequestId("req_1")
+        auth_challenge: Any = None
+        request: Any = None
+        frame_id: str = ""
+        resource_type: str = "Document"
+
+    class FakeSender:
+        def __init__(self):
+            self.calls = []
+        async def send(self, cmd):
+            self.calls.append(next(cmd))
+
+    ba_auth_test = BrowserAgent(proxy_url="http://alice:secret@proxy.test:3128")
+
+    # Server auth (401) should get "Default", not proxy creds
+    sender = FakeSender()
+    server_event = FakeAuthEvent(request_id=RequestId("srv_1"), auth_challenge=FakeAuthChallenge(source="Server"))
+    asyncio.run(ba_auth_test._handle_proxy_auth_for(sender, server_event))
+    server_resp = sender.calls[0]["params"]["authChallengeResponse"]
+    check("server auth gets Default response", server_resp == {"response": "Default"})
+
+    # Proxy auth (407) should get ProvideCredentials with creds
+    sender2 = FakeSender()
+    proxy_event = FakeAuthEvent(request_id=RequestId("prx_1"), auth_challenge=FakeAuthChallenge(source="Proxy"))
+    asyncio.run(ba_auth_test._handle_proxy_auth_for(sender2, proxy_event))
+    proxy_resp = sender2.calls[0]["params"]["authChallengeResponse"]
+    check("proxy auth gets ProvideCredentials", proxy_resp["response"] == "ProvideCredentials")
+    check("proxy auth sends username", proxy_resp.get("username") == "alice")
+    check("proxy auth sends password", proxy_resp.get("password") == "secret")
+
+    # Same request_id again should get CancelAuth (retry guard)
+    sender3 = FakeSender()
+    asyncio.run(ba_auth_test._handle_proxy_auth_for(sender3, proxy_event))
+    retry_resp = sender3.calls[0]["params"]["authChallengeResponse"]
+    check("proxy auth retry gets CancelAuth", retry_resp == {"response": "CancelAuth"})
+
+    # ─────────────────────────────────────────────────────────────────────
     print()
     print(f"  Passed: {PASS}")
     print(f"  Failed: {FAIL}")
