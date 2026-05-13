@@ -1,4 +1,4 @@
-# AutoWrec v1.4
+# AutoWrec v1.5
 
 A browser session recorder that captures network traffic and user actions — then exposes everything as tools for AI coding assistants.
 
@@ -79,7 +79,7 @@ After adding the config, restart Claude Code. You should see `autowrec` listed w
 
 | Tool | Purpose | Key parameters |
 |------|---------|----------------|
-| `record_session` | Launch browser and start recording (non-blocking) | `url` |
+| `record_session` | Launch browser and start recording (non-blocking) | `url`, `proxy` |
 | `check_recording` | Poll whether the recording is still running or finished | — |
 | `read_session_summary` | Lean session digest by default | `verbose=true` for full SUMMARY.json |
 | `read_timeline` | Paginated time-sorted user actions + network requests | `offset`, `limit`, `summary=false` for full events |
@@ -114,6 +114,7 @@ Options:
 --no-blocklist        Disable ad/tracker domain filtering
 --redact              Redact passwords, auth headers, and cookies
 --verbose             Show detailed diagnostic output
+--proxy URL           Proxy for browser traffic (http, socks4, socks5)
 -V, --version         Show version
 -h, --help            Show help
 ```
@@ -155,6 +156,37 @@ sandbox_timeout = 60       # Seconds per IPython cell
 enabled = true
 speed = 1.0
 ```
+
+### Proxy Support
+
+AutoWrec can route all browser traffic through an HTTP, HTTPS, SOCKS4, or SOCKS5 proxy.
+
+```bash
+# Via CLI flag
+autowrec record https://example.com --proxy http://proxy.corp:8080
+
+# Via environment variable
+export AUTOWREC_PROXY=http://user:pass@proxy.corp:3128
+autowrec record https://example.com
+```
+
+Or via config.toml:
+
+```toml
+[proxy]
+url = "http://proxy.corp:8080"
+```
+
+**Authenticated HTTP proxies** are supported — embed credentials in the URL:
+`http://user:pass@proxy.corp:3128`. Credentials are handled via CDP at the protocol
+level (not leaked to Chrome's UI).
+
+**SOCKS4/SOCKS5 proxies** work for unauthenticated connections: `socks5://host:port` or `socks4://host:port`.
+SOCKS5 with username/password auth is a Chrome limitation (Chromium #256785) and
+is not supported. Use IP whitelisting or a local proxy forwarder.
+
+**Priority:** `--proxy` CLI flag or MCP `record_session(proxy=...)` parameter >
+`AUTOWREC_PROXY` env var > `[proxy] url` in config.toml.
 
 ## Testing
 

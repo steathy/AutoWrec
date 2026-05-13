@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.5.0] — 2026-05-13
+
+### Added
+
+- **Proxy support.** Route all browser traffic through HTTP, HTTPS, SOCKS4, or
+  SOCKS5 proxies via `--proxy` CLI flag, `AUTOWREC_PROXY` env var, or
+  `[proxy] url` in config.toml.
+- **Authenticated HTTP proxy support.** Embed credentials in the proxy URL
+  (`http://user:pass@host:port`). Auth is handled via CDP `Fetch.authRequired`
+  at the protocol level.
+- **`proxy` parameter** added to `record_session` MCP tool.
+
+### Notes
+
+- SOCKS4/SOCKS5 with username/password auth is not supported (Chrome limitation,
+  Chromium #256785). Use IP whitelisting or a local proxy forwarder.
+
 ## [1.4.0] — 2026-05-12
 
 ### Removed
