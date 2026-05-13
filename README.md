@@ -1,6 +1,6 @@
-# AutoWrec v1.3
+# AutoWrec v1.4
 
-A browser session recorder that captures network traffic, user actions, and screen video — then exposes everything as tools for AI coding assistants.
+A browser session recorder that captures network traffic and user actions — then exposes everything as tools for AI coding assistants.
 
 Works as a **standalone CLI** or as an **MCP server** for Claude Code, Codex, and other MCP-compatible AI tools. No API keys needed.
 
@@ -10,12 +10,12 @@ Based on [AutomatiQ](https://github.com/StoneSteel27/AutomatiQ) by Kanishq Vijay
 
 ```
 You browse a website         AutoWrec captures everything          AI explores via MCP tools
-    (Chrome)         -->     (network, actions, video)      -->    (Claude Code, Codex, etc.)
+    (Chrome)         -->        (network, actions)           -->    (Claude Code, Codex, etc.)
 ```
 
-**Record** — AutoWrec launches Chrome with CDP instrumentation. You browse normally. Every HTTP request/response, click, keystroke, and page navigation is captured. Screen video is optional and captures only the Chrome window (not your full desktop).
+**Record** — AutoWrec launches Chrome with CDP instrumentation. You browse normally. Every HTTP request/response, click, keystroke, and page navigation is captured.
 
-**Explore** — The AI tool reads the structured workspace through MCP tools: session summaries, paginated timelines, individual HTTP transactions, file contents, and extracted video frames.
+**Explore** — The AI tool reads the structured workspace through MCP tools: session summaries, paginated timelines, individual HTTP transactions, and file contents.
 
 **Build** — The AI tool uses the persistent Python environment to test hypotheses against the live site and assemble a standalone automation script.
 
@@ -75,18 +75,17 @@ Add to your project's `.mcp.json` or global `~/.claude.json`:
 
 #### Verify the MCP Server
 
-After adding the config, restart Claude Code. You should see `autowrec` listed when you run `/mcp` in Claude Code. The AI tool now has access to 9 tools:
+After adding the config, restart Claude Code. You should see `autowrec` listed when you run `/mcp` in Claude Code. The AI tool now has access to 8 tools:
 
 | Tool | Purpose | Key parameters |
 |------|---------|----------------|
-| `record_session` | Launch browser and start recording (non-blocking) | `url`, `enable_video` |
+| `record_session` | Launch browser and start recording (non-blocking) | `url` |
 | `check_recording` | Poll whether the recording is still running or finished | — |
 | `read_session_summary` | Lean session digest by default | `verbose=true` for full SUMMARY.json |
 | `read_timeline` | Paginated time-sorted user actions + network requests | `offset`, `limit`, `summary=false` for full events |
 | `read_transaction` | HTTP transaction metadata (headers, cookies; **never** body content) | `level=minimal\|headers\|full` |
 | `list_workspace_files` | Browse the workspace directory | `subdirectory`, `include_sizes=true` |
 | `read_file` | Read a workspace file | `mode=stat\|head\|raw`, `offset`, `limit` (raw only) |
-| `extract_video_frames` | Get base64 JPEG frames from video clips | `num_frames`, `quality=low\|med\|high` |
 | `execute_code` | Run Python in a persistent IPython environment | `code`, `timeout` |
 
 > **v1.3 note:** `read_transaction` no longer inlines body content. To read a request payload or response body, call `read_file` on `<request_folder>/req_payload.<ext>` or `<request_folder>/res_body.<ext>` — the extension is in `request.content_detection.extension` (visible at `level=full`).
@@ -133,9 +132,6 @@ Records a session, then prints a detailed report of everything captured.
 output/workspace/session_dump/
 ├── SUMMARY.json              # Session metadata + statistics
 ├── timeline.json             # Time-sorted actions + network events
-├── full_record.mp4           # Full screen recording (if video enabled)
-├── clips/                    # Per-action video segments
-│   └── action_clip_000.mp4
 └── requests/                 # One folder per HTTP transaction
     └── 000_GET_example.com/
         ├── transaction.json  # Headers, cookies, timing, security flags
@@ -149,17 +145,11 @@ output/workspace/session_dump/
 
 ```toml
 [recording]
-fps = 3                    # Frames per second for video capture
-segment_pad = 2            # Seconds of padding around action clips
-merge_gap_threshold = 1.5  # Merge clips closer than this
 blocklist_enabled = true   # Filter ad/tracker domains from captures
 redact_sensitive = false   # Redact passwords, auth headers, cookies
 
 [agent]
 sandbox_timeout = 60       # Seconds per IPython cell
-
-[mcp]
-video_enabled = false      # Enable video in MCP mode
 
 [banner]
 enabled = true
@@ -181,14 +171,13 @@ python tests/test_debug_review.py   # regression suite from review passes
 
 ```
 src/autowrec/
-├── mcp_server.py          # FastMCP server (9 tools over stdio)
+├── mcp_server.py          # FastMCP server (8 tools over stdio)
 ├── config.py              # Global configuration + TOML loader
 ├── console.py             # Rich terminal output
 ├── bin_manager.py         # Downloads rg, jq, sd for execution environment
 ├── recorder/
 │   ├── __init__.py        # Recording orchestration
 │   ├── browser_agent.py   # Chrome CDP instrumentation (zendriver)
-│   ├── video_recorder.py  # Chrome window capture (MSS + FFmpeg)
 │   ├── data_compressor.py # Workspace compilation
 │   ├── blocklist_db.py    # Ad/tracker domain filter (SQLite)
 │   └── js/telemetry.js    # Injected browser event tracking
@@ -205,8 +194,6 @@ tests/
 
 ## Key Features
 
-- **Chrome-only video capture (Windows)** — records only the Chrome window, not your full desktop. Tracks window position if you move it. On Linux/macOS, falls back to full-screen capture.
-- **PID-based window targeting** — correctly identifies the recording Chrome instance even if you have other Chrome windows open (Windows).
 - **Browser close detection** — closing the Chrome window automatically stops the recording (no Ctrl+C needed).
 - **Zero LLM dependencies** — no API keys, no litellm, no instructor. The host AI provides all intelligence.
 - **Path traversal protection** — all file access tools validate paths stay within the workspace.
@@ -219,7 +206,6 @@ tests/
 
 - Python 3.11+
 - Chrome/Chromium (for recording)
-- FFmpeg (bundled via imageio-ffmpeg)
 
 ## License
 

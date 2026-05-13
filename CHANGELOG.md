@@ -6,6 +6,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.4.0] — 2026-05-12
+
+### Removed
+
+- **Video recording removed entirely.** Screen capture, FFmpeg clip splitting,
+  and the `extract_video_frames` MCP tool have been removed. AutoWrec now
+  captures network traffic and user actions only.
+- **`enable_video` parameter removed** from `record_session` tool and
+  `run_recording()` function.
+- **`MCP_VIDEO_ENABLED`**, `FPS`, `SEGMENT_PAD_SECONDS`,
+  `MERGE_GAP_THRESHOLD_SECONDS` config constants removed.
+- **`[mcp]` config section removed** (its only setting was `video_enabled`).
+- **`video_recorder.py` deleted** — 384 lines including `ActionVideoRecorder`
+  (with `split_video`, `start`, `stop`, `_record_loop`), plus module-level
+  helpers `_find_chrome_window`, `_get_window_rect`, `_get_process_tree`.
+- **Dependencies removed:** `mss`, `numpy`, `imageio-ffmpeg`.
+- **`video()` log function** removed from console.py.
+- **Workspace output changes:** `full_record.mp4` and `clips/` directory no
+  longer produced. Timeline events no longer carry `ai_video_file`,
+  `video_start_sec`, `video_end_sec` fields.
+
+### Changed
+
+- MCP tool count: **9 → 8** (extract_video_frames removed).
+- `compile_workspace()` signature simplified (no video params).
+- `data_compressor.merge_and_annotate_actions()` replaced with `_sort_actions()`.
+
+### Notes
+
+- Existing `~/.autowrec/config.toml` files with a `[mcp]` section are harmlessly
+  ignored — the TOML loader silently skips unknown sections.
+- The `v1.3.2` tag preserves the last video-capable release for anyone who needs it.
+
 ## [1.3.2] — 2026-05-04
 
 Two follow-ups surfaced by an out-of-band code review pass against the
