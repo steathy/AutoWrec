@@ -57,7 +57,7 @@ class BrowserAgent:
             from urllib.parse import urlparse, unquote
             parsed = urlparse(proxy_url)
             if parsed.scheme not in ("http", "https", "socks5", "socks4"):
-                warn(f"Unsupported proxy scheme {parsed.scheme!r} — ignoring proxy. Use http://, https://, or socks5://")
+                warn(f"Unsupported proxy scheme {parsed.scheme!r} — ignoring proxy. Use http://, https://, socks4://, or socks5://")
                 self.proxy_url = None
             elif not parsed.hostname:
                 warn(f"Invalid proxy URL (no hostname) — ignoring proxy")

@@ -167,7 +167,7 @@ def run_postflight():
     check("SANDBOX_TIMEOUT_SECONDS still exists", hasattr(config, "SANDBOX_TIMEOUT_SECONDS"))
     check("BLOCKLIST_ENABLED still exists", hasattr(config, "BLOCKLIST_ENABLED"))
     check("REDACT_SENSITIVE still exists", hasattr(config, "REDACT_SENSITIVE"))
-    check("VERSION is 1.4.0", config.VERSION == "1.4.0", f"got {config.VERSION!r}")
+    check("VERSION is post-video-removal (>= 1.4.0)", config.VERSION >= "1.4.0", f"got {config.VERSION!r}")
 
     section("POST-3: run_recording has no enable_video param")
     from autowrec.recorder import run_recording

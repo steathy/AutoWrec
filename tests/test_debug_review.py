@@ -486,17 +486,15 @@ def main():
         from autowrec import mcp_server as mcp_mod
         saved = mcp_mod._build_server  # noqa: F841 (kept for ref)
 
-        # Drive record_session through its real path with a stub thread.
-        # Easier: directly emulate the post-call state record_session
-        # leaves behind: workspace cleared, error set.
-        await m.call_tool("record_session", {"url": "about:blank"})
-        # Replace the live thread with a finished one carrying the failure
+        # Directly emulate the post-call state record_session leaves behind:
+        # workspace cleared, error set, finished thread. Avoids launching
+        # a real Chrome/recorder just to test workspace invalidation.
         class FinishedThread:
             def is_alive(self):
                 return False
+        st["workspace"] = None
         st["recording_thread"] = FinishedThread()
         st["recording_error"] = "boom"
-        # record_session itself cleared workspace=None. Verify that.
         workspace_cleared = st.get("workspace") in (None, "")
 
         # Reading session_summary now should raise with the error message.

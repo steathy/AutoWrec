@@ -56,7 +56,7 @@ BANNER_SPEED = 1.0
 VERBOSE = False
 
 # ── Proxy ──────────────────────────────────────────────────────────────────
-# Format: http://host:port, http://user:pass@host:port, socks5://host:port
+# Format: http://host:port, http://user:pass@host:port, socks4://host:port, socks5://host:port
 # Priority: --proxy CLI flag > AUTOWREC_PROXY env var > [proxy] config.toml
 PROXY_URL: str | None = os.environ.get("AUTOWREC_PROXY")
 
@@ -95,7 +95,7 @@ speed   = 1.0
 # dir = "output"
 
 [proxy]
-# HTTP/HTTPS/SOCKS5 proxy for all browser traffic.
+# HTTP/HTTPS/SOCKS4/SOCKS5 proxy for all browser traffic.
 # Format: scheme://[user:pass@]host:port
 # Examples:
 #   url = "http://proxy.corp.example.com:8080"

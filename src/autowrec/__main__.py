@@ -146,7 +146,7 @@ def _print_rich_help():
     t3.add_column(style="bold", min_width=16)
     t3.add_column()
     t3.add_row("  recording", "Blocklist and redaction settings")
-    t3.add_row("  proxy", "HTTP/SOCKS5 proxy for browser traffic")
+    t3.add_row("  proxy", "HTTP/SOCKS4/SOCKS5 proxy for browser traffic")
     t3.add_row("  banner", "Startup animation toggle and speed")
     t3.add_row("  output", "Root directory for all generated output")
     console.print(t3)
@@ -222,7 +222,7 @@ def main():
         p.add_argument("--no-blocklist", action="store_true", default=False)
         p.add_argument("--redact", action="store_true", default=False)
         p.add_argument("--verbose", action="store_true", default=False)
-        p.add_argument("--proxy", metavar="URL", help="Proxy URL (http://host:port or socks5://host:port)")
+        p.add_argument("--proxy", metavar="URL", help="Proxy URL (http://, socks4://, socks5://)")
         p.add_argument("-h", "--help", action="store_true", default=False, dest="help_flag")
         p.add_argument("-V", "--version", action="store_true", default=False)
 

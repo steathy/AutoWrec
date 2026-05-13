@@ -113,7 +113,7 @@ def _build_server():
     @mcp.tool()
     def record_session(
         url: Annotated[str, "The starting URL to navigate to"] = "about:blank",
-        proxy: Annotated[str | None, "Proxy URL (e.g. 'http://host:port', 'socks5://host:port'). Auth: 'http://user:pass@host:port'"] = None,
+        proxy: Annotated[str | None, "Proxy URL (http://, socks4://, socks5://). Auth: 'http://user:pass@host:port'"] = None,
     ) -> str:
         """Launch Chrome with CDP capture and return immediately. Poll
         check_recording until the user closes the browser, then explore
