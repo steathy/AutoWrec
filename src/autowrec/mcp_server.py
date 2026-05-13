@@ -16,7 +16,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import subprocess
 import threading
 from typing import Annotated, Literal
 
@@ -114,7 +113,6 @@ def _build_server():
     @mcp.tool()
     def record_session(
         url: Annotated[str, "The starting URL to navigate to"] = "about:blank",
-        enable_video: Annotated[bool | None, "Whether to record screen video (default: from config)"] = None,
     ) -> str:
         """Launch Chrome with CDP capture and return immediately. Poll
         check_recording until the user closes the browser, then explore
@@ -124,19 +122,14 @@ def _build_server():
         if _state["recording_thread"] and _state["recording_thread"].is_alive():
             return "A recording is already in progress. Close the browser to finish it, or call check_recording for status."
 
-        if enable_video is None:
-            enable_video = config.MCP_VIDEO_ENABLED
-
         config.ensure_output_dirs()
 
-        # Invalidate any prior session pointer so a failed recording can't
-        # silently surface the previous workspace through read_* tools.
         _state["recording_error"] = None
         _state["workspace"] = None
 
         def _run_in_background():
             try:
-                result = _run_recording(url=url, enable_video=enable_video)
+                result = _run_recording(url=url)
                 if result:
                     _state["workspace"] = result
                 else:
@@ -427,98 +420,6 @@ def _build_server():
                 "offset": offset,
                 "bytes_read": len(raw),
                 "has_more": offset + len(raw) < size,
-            },
-            separators=(",", ":"),
-        )
-
-    @mcp.tool()
-    def extract_video_frames(
-        clip_path: Annotated[str, "Path to video clip relative to session_dump (e.g. 'clips/action_clip_000.mp4')"],
-        num_frames: Annotated[int, "Evenly-spaced frames to extract (1-12)"] = 2,
-        quality: Annotated[
-            Literal["low", "med", "high"],
-            "low (480px, ~10KB/frame), med (720px, ~30KB/frame), high (1280px, ~80KB/frame)",
-        ] = "low",
-    ) -> str:
-        """Sample JPEG frames from a video clip as base64 images.
-        Defaults are tuned for token efficiency — bump quality only when you need detail."""
-        num_frames = max(1, min(num_frames, 12))
-        workspace = _get_workspace()
-        video_path = _safe_resolve(workspace, clip_path)
-
-        if not os.path.isfile(video_path):
-            raise FileNotFoundError(f"Video file not found: {clip_path}")
-
-        import imageio_ffmpeg
-
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-
-        scale, qv = {
-            "low": ("scale=480:-1", "5"),
-            "med": ("scale=720:-1", "4"),
-            "high": ("scale=1280:-1", "2"),
-        }[quality]
-
-        probe_cmd = [
-            ffmpeg_exe, "-i", video_path,
-            "-f", "null", "-"
-        ]
-        try:
-            probe_result = subprocess.run(
-                probe_cmd, capture_output=True, text=True, timeout=30
-            )
-            duration = 0.0
-            for line in probe_result.stderr.split("\n"):
-                if "Duration:" in line:
-                    parts = line.split("Duration:")[1].split(",")[0].strip()
-                    h, m, s = parts.split(":")
-                    duration = float(h) * 3600 + float(m) * 60 + float(s)
-                    break
-        except Exception:
-            duration = 5.0
-
-        if duration <= 0:
-            duration = 5.0
-
-        # For very short clips, sampling N timestamps with a fixed end_pad
-        # collapses everything to 0 (B2). Fall back to a single mid-clip
-        # sample, and otherwise spread evenly inside a small end-pad.
-        if duration < 0.5 or num_frames == 1:
-            timestamps = [duration / 2]
-        else:
-            end_pad = min(0.05, duration * 0.02)
-            span = max(duration - 2 * end_pad, 0.001)
-            timestamps = [
-                end_pad + span * (i + 0.5) / num_frames for i in range(num_frames)
-            ]
-
-        frames = []
-        for t in timestamps:
-            cmd = [
-                ffmpeg_exe,
-                "-ss", str(t),
-                "-i", video_path,
-                "-vframes", "1",
-                "-vf", scale,
-                "-q:v", qv,
-                "-f", "image2",
-                "-c:v", "mjpeg",
-                "pipe:1",
-            ]
-            try:
-                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
-                if result.stdout and len(result.stdout) > 100:
-                    frames.append(base64.b64encode(result.stdout).decode("ascii"))
-            except Exception:
-                continue
-
-        return json.dumps(
-            {
-                "clip": clip_path,
-                "duration_seconds": round(duration, 2),
-                "quality": quality,
-                "frames_extracted": len(frames),
-                "frames": [f"data:image/jpeg;base64,{f}" for f in frames],
             },
             separators=(",", ":"),
         )

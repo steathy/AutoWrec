@@ -1,5 +1,5 @@
 """
-Recorder sub-package — captures a full browser session (network + video + actions)
+Recorder sub-package — captures a full browser session (network + actions)
 and compiles it into a structured workspace dump for the agent.
 
 Usage:
@@ -9,9 +9,7 @@ Usage:
 
 import asyncio
 import os
-import shutil
 import signal
-import tempfile
 import urllib.request
 
 from .. import config
@@ -19,11 +17,9 @@ from ..console import detail, error, info, log_exception, rule, warn
 from .blocklist_db import BlocklistDB
 from .browser_agent import BrowserAgent
 from .data_compressor import compile_workspace
-from .video_recorder import ActionVideoRecorder
 
-# Module-level refs so the SIGINT handler can reach them
+# Module-level ref so the SIGINT handler can reach it
 _browser_agent: BrowserAgent | None = None
-_video_recorder: ActionVideoRecorder | None = None
 
 
 def _handle_sigint(signum, frame):
@@ -61,20 +57,17 @@ def _init_blocklist() -> BlocklistDB | None:
     return db
 
 
-def run_recording(
-    url: str = "about:blank",
-    enable_video: bool = True,
-) -> str | bool:
-    """Run the full recording pipeline: browser → video → compile workspace.
+def run_recording(url: str = "about:blank") -> str | bool:
+    """Run the full recording pipeline: browser → compile workspace.
 
-    1. Launches Chrome with CDP instrumentation and (optionally) screen capture.
+    1. Launches Chrome with CDP instrumentation.
     2. User browses freely; Ctrl+C or closing the browser stops the session.
     3. Compiles the captured data into output/workspace/session_dump/.
 
     Returns:
         Path to the compiled workspace on success, False on failure.
     """
-    global _browser_agent, _video_recorder
+    global _browser_agent
 
     config.ensure_output_dirs()
 
@@ -85,21 +78,12 @@ def run_recording(
         warn(f"Could not install SIGINT handler (running in a thread?): {exc}")
         prev_handler = signal.SIG_DFL
 
-    temp_video_path = None
-    if enable_video:
-        fd, temp_video_path = tempfile.mkstemp(suffix=".mp4", prefix="autowrec_")
-        os.close(fd)
-
     blocklist = _init_blocklist()
 
-    if enable_video:
-        _video_recorder = ActionVideoRecorder(fps=config.FPS, output_path=temp_video_path)
     _browser_agent = BrowserAgent(blocklist=blocklist)
 
     rule("STARTING RECORDER", style="bold cyan")
     info(f"Target URL : {url}")
-    if enable_video:
-        info(f"Video      : enabled ({config.FPS} FPS)")
     if blocklist:
         info(f"Blocklist  : {blocklist.total_enabled_domains()} domains loaded")
     else:
@@ -110,37 +94,12 @@ def run_recording(
     session_data = None
     result: str | bool = False
 
-    def _on_browser_ready(pid):
-        if _video_recorder:
-            _video_recorder.set_target_pid(pid)
-
     try:
-        if _video_recorder:
-            if not _video_recorder.start():
-                warn("Video recording unavailable — continuing without video.")
-                _video_recorder = None
-                if temp_video_path and os.path.exists(temp_video_path):
-                    try:
-                        os.unlink(temp_video_path)
-                    except OSError as exc:
-                        warn(f"Could not remove temp video file {temp_video_path}: {exc}")
-                    else:
-                        temp_video_path = None
-                else:
-                    temp_video_path = None
-        session_data = asyncio.run(_browser_agent.run_session(url=url, on_browser_ready=_on_browser_ready))
+        session_data = asyncio.run(_browser_agent.run_session(url=url))
     except Exception as exc:
         error(f"Recording session failed: {exc}")
         log_exception()
     finally:
-        video_start_unix = None
-        if _video_recorder:
-            try:
-                video_start_unix = _video_recorder.stop()
-            except Exception as exc:
-                error(f"Failed to stop video recorder: {exc}")
-                log_exception()
-
         try:
             signal.signal(signal.SIGINT, prev_handler)
         except (OSError, ValueError):
@@ -148,37 +107,11 @@ def run_recording(
 
         if session_data:
             try:
-                recorded_video = (
-                    temp_video_path
-                    if video_start_unix and temp_video_path
-                    and os.path.exists(temp_video_path)
-                    and os.path.getsize(temp_video_path) > 5000
-                    else None
-                )
-            except OSError as exc:
-                warn(f"Could not inspect temp video file {temp_video_path}: {exc}")
-                recorded_video = None
-
-            try:
-                success = compile_workspace(
-                    session_data=session_data,
-                    full_video_path=recorded_video,
-                    video_start_unix=video_start_unix,
-                )
+                success = compile_workspace(session_data=session_data)
             except Exception as exc:
                 error(f"Workspace compilation raised unexpectedly: {exc}")
                 log_exception()
                 success = False
-
-            if success and recorded_video and os.path.exists(recorded_video):
-                final_video_path = os.path.join(str(config.WORKSPACE_DIR), "session_dump", "full_record.mp4")
-                try:
-                    os.makedirs(os.path.dirname(final_video_path), exist_ok=True)
-                    shutil.move(recorded_video, final_video_path)
-                    info(f"Full recording saved to {final_video_path}")
-                except OSError as exc:
-                    error(f"Failed to move recording to workspace: {exc}")
-                    log_exception()
 
             if success:
                 result = os.path.join(str(config.WORKSPACE_DIR), "session_dump")
@@ -195,13 +128,6 @@ def run_recording(
             except Exception as exc:
                 warn(f"Failed to close blocklist DB: {exc}")
 
-        if temp_video_path and os.path.exists(temp_video_path):
-            try:
-                os.unlink(temp_video_path)
-            except OSError as exc:
-                warn(f"Could not remove temp video file {temp_video_path}: {exc}")
-
         _browser_agent = None
-        _video_recorder = None
 
     return result

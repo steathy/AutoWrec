@@ -35,11 +35,6 @@ WORKSPACE_DIR = OUTPUT_DIR / "workspace"
 BLOCKLIST_DIR = OUTPUT_DIR / "blocklist"
 BLOCKLIST_DB = OUTPUT_DIR / "blocklist.db"
 
-# ── Recording tunables ───────────────────────────────────────────────────────
-FPS = 3
-SEGMENT_PAD_SECONDS = 2
-MERGE_GAP_THRESHOLD_SECONDS = 1.5
-
 # ── Redaction ───────────────────────────────────────────────────────────────
 REDACT_SENSITIVE = False
 
@@ -57,9 +52,6 @@ SANDBOX_TIMEOUT_SECONDS = 60
 BANNER_ENABLED = True
 BANNER_SPEED = 1.0
 
-# ── MCP defaults ────────────────────────────────────────────────────────────
-MCP_VIDEO_ENABLED = False
-
 VERBOSE = False
 
 
@@ -71,15 +63,6 @@ _DEFAULT_CONFIG_TOML = """\
 # Values here override the built-in defaults.
 
 [recording]
-# Frames per second for screen capture.
-fps                     = 3
-
-# Seconds of padding added around each action clip.
-segment_pad             = 2
-
-# Clips closer than this (seconds) are merged into one.
-merge_gap_threshold     = 1.5
-
 # Filter out ad/tracker domains from captured network traffic.
 # Disable to capture all requests unfiltered.
 blocklist_enabled       = true
@@ -105,11 +88,6 @@ speed   = 1.0
 # Relative paths are resolved from the directory where you run `autowrec`.
 # dir = "output"
 
-[mcp]
-# Enable video recording in MCP mode (default: false).
-# When enabled, screen video is captured alongside network/action data.
-# The host AI can request frame extraction via the extract_video_frames tool.
-video_enabled = false
 """
 
 
@@ -124,11 +102,9 @@ def _load_config_toml():
     Tolerates unknown sections from older config files.
     """
     global SANDBOX_TIMEOUT_SECONDS
-    global FPS, SEGMENT_PAD_SECONDS, MERGE_GAP_THRESHOLD_SECONDS
     global REDACT_SENSITIVE, BLOCKLIST_ENABLED
     global BANNER_ENABLED, BANNER_SPEED
     global OUTPUT_DIR, WORKSPACE_DIR, BLOCKLIST_DIR, BLOCKLIST_DB
-    global MCP_VIDEO_ENABLED
 
     if not CONFIG_FILE.exists():
         try:
@@ -175,12 +151,6 @@ def _load_config_toml():
 
     # [recording]
     rec = _safe_table(data, "recording")
-    if "fps" in rec:
-        FPS = _safe_int(rec["fps"], FPS, "recording.fps")
-    if "segment_pad" in rec:
-        SEGMENT_PAD_SECONDS = _safe_float(rec["segment_pad"], SEGMENT_PAD_SECONDS, "recording.segment_pad")
-    if "merge_gap_threshold" in rec:
-        MERGE_GAP_THRESHOLD_SECONDS = _safe_float(rec["merge_gap_threshold"], MERGE_GAP_THRESHOLD_SECONDS, "recording.merge_gap_threshold")
     if "blocklist_enabled" in rec:
         BLOCKLIST_ENABLED = bool(rec["blocklist_enabled"])
     if "redact_sensitive" in rec:
@@ -217,15 +187,7 @@ def _load_config_toml():
         else:
             print(f"[WARN] output.dir must be a string, got {type(dir_val).__name__}: {dir_val!r}. Using default.", file=sys.stderr)
 
-    # [mcp]
-    mcp_cfg = _safe_table(data, "mcp")
-    if "video_enabled" in mcp_cfg:
-        MCP_VIDEO_ENABLED = bool(mcp_cfg["video_enabled"])
-
     # Range validation
-    FPS = max(1, FPS)
-    SEGMENT_PAD_SECONDS = max(0.0, SEGMENT_PAD_SECONDS)
-    MERGE_GAP_THRESHOLD_SECONDS = max(0.0, MERGE_GAP_THRESHOLD_SECONDS)
     SANDBOX_TIMEOUT_SECONDS = max(1, SANDBOX_TIMEOUT_SECONDS)
     BANNER_SPEED = max(0.1, BANNER_SPEED)
 

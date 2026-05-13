@@ -478,7 +478,7 @@ class BrowserAgent:
         except Exception:
             pass
 
-    async def run_session(self, url: str, on_browser_ready=None) -> dict:
+    async def run_session(self, url: str) -> dict:
         if not self._load_scripts():
             return {}
 
@@ -486,9 +486,6 @@ class BrowserAgent:
             self.browser = await zd.start(headless=False, browser_args=["--incognito", "--disable-popup-blocking"])
             self.recording_start = datetime.now(UTC)
             self.recording_active = True
-
-            if on_browser_ready and self.browser._process_pid:
-                on_browser_ready(self.browser._process_pid)
 
             self.tab = await self.browser.get("about:blank")
 

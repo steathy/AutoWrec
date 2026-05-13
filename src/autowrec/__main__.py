@@ -53,9 +53,6 @@ def _preload():
             logging.getLogger("autowrec").setLevel(logging.DEBUG)
 
         if cmd in ("record", "mcp"):
-            import imageio_ffmpeg  # noqa: F401
-            import mss  # noqa: F401
-            import numpy  # noqa: F401
             import zendriver  # noqa: F401
 
     except Exception as exc:
@@ -126,7 +123,7 @@ def _print_rich_help():
     t = Table(show_header=False, box=None, collapse_padding=True)
     t.add_column(style="bold", min_width=16)
     t.add_column()
-    t.add_row("record <url>", "Capture a browser session (screen + network + actions)")
+    t.add_row("record <url>", "Capture a browser session (network + actions)")
     t.add_row("mcp", "Start the MCP server (for Claude Code / Codex integration)")
     console.print(t)
     console.print()
@@ -146,8 +143,7 @@ def _print_rich_help():
     t3 = Table(show_header=False, box=None, collapse_padding=True)
     t3.add_column(style="bold", min_width=16)
     t3.add_column()
-    t3.add_row("  recording", "Capture FPS, clip padding, and merge thresholds")
-    t3.add_row("  mcp", "MCP server settings (video toggle)")
+    t3.add_row("  recording", "Blocklist and redaction settings")
     t3.add_row("  banner", "Startup animation toggle and speed")
     t3.add_row("  output", "Root directory for all generated output")
     console.print(t3)

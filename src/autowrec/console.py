@@ -28,7 +28,6 @@ _theme = Theme(
         "error": "bold red",
         "success": "bold green",
         "action": "magenta",
-        "video": "blue",
         "ai": "bold magenta",
         "think": "italic",
         "exec": "bold yellow",
@@ -96,11 +95,6 @@ def success(msg: str) -> None:
 
 def action(msg: str) -> None:
     console.print(f"[action]\\[ACTION][/action] {escape(msg)}")
-    _log(logging.INFO, msg)
-
-
-def video(msg: str) -> None:
-    console.print(f"[video]\\[VIDEO][/video] {escape(msg)}")
     _log(logging.INFO, msg)
 
 

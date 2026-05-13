@@ -8,7 +8,6 @@ from urllib.parse import urlparse
 
 from .. import config
 from ..console import detail, error, info, log_exception, print_exception, rule, success, warn
-from .video_recorder import ActionVideoRecorder
 
 try:
     from magika import Magika
@@ -31,7 +30,7 @@ def _get_paths():
     """Derive workspace paths from current config (not cached at import time)."""
     workspace = str(config.WORKSPACE_DIR)
     output = os.path.join(workspace, "session_dump")
-    return workspace, output, os.path.join(output, "clips"), os.path.join(output, "requests")
+    return workspace, output, os.path.join(output, "requests")
 
 
 def sanitize_filename(name: str) -> str:
@@ -206,65 +205,10 @@ def save_content(path, content, is_base64=False):
         log_exception()
 
 
-def merge_and_annotate_actions(
-    actions: list[dict],
-    full_video_path: str | None,
-    video_start_unix: float | None,
-    clips_dir: str | None = None,
-) -> list[dict]:
-    """Merge action clusters and annotate with video clip paths.
-
-    NOTE: Mutates input — sorts the actions list in place and adds video
-    annotation keys (ai_video_file, video_start_sec, video_end_sec) to action dicts.
-    """
-    if not actions:
-        return actions
-
-    actions.sort(key=lambda x: x.get("timestamp_unix", 0))
-    merged_clips = []
-    current_cluster = []
-
-    for action in actions:
-        if not current_cluster:
-            current_cluster.append(action)
-        else:
-            last_action_time = current_cluster[-1].get("timestamp_unix", 0)
-            current_action_time = action.get("timestamp_unix", 0)
-
-            if (current_action_time - last_action_time) <= config.MERGE_GAP_THRESHOLD_SECONDS:
-                current_cluster.append(action)
-            else:
-                merged_clips.append(current_cluster)
-                current_cluster = [action]
-
-    if current_cluster:
-        merged_clips.append(current_cluster)
-
-    has_video = full_video_path and video_start_unix and os.path.exists(full_video_path)
-
-    if not has_video:
-        return actions
-
-    if clips_dir is None:
-        _, _, clips_dir, _ = _get_paths()
-    info(f"Splitting {len(merged_clips)} video action segments...")
-    for idx, cluster in enumerate(merged_clips):
-        first_action_time_relative = cluster[0]["timestamp_unix"] - video_start_unix
-        clip_start = max(0, first_action_time_relative - config.SEGMENT_PAD_SECONDS)
-
-        last_action_time_relative = cluster[-1]["timestamp_unix"] - video_start_unix
-        clip_end = last_action_time_relative + config.SEGMENT_PAD_SECONDS
-
-        clip_filename = f"action_clip_{idx:03d}.mp4"
-        clip_path = os.path.join(clips_dir, clip_filename)
-
-        clip_ok = ActionVideoRecorder.split_video(full_video_path, clip_path, clip_start, clip_end)
-        if clip_ok:
-            for action in cluster:
-                action["ai_video_file"] = f"clips/{clip_filename}"
-                action["video_start_sec"] = round(clip_start, 2)
-                action["video_end_sec"] = round(clip_end, 2)
-
+def _sort_actions(actions: list[dict]) -> list[dict]:
+    """Sort actions by timestamp in place."""
+    if actions:
+        actions.sort(key=lambda x: x.get("timestamp_unix", 0))
     return actions
 
 
@@ -277,9 +221,9 @@ def process_network_requests(requests: list[dict], output_dir: str | None = None
     timeline_requests = []
     detection_stats = {"request_detected": 0, "response_detected": 0, "mismatches": 0}
     if requests_dir is None:
-        _, _, _, requests_dir = _get_paths()
+        _, _, requests_dir = _get_paths()
     if output_dir is None:
-        _, output_dir, _, _ = _get_paths()
+        _, output_dir, _ = _get_paths()
 
     for idx, item in enumerate(requests):
         try:
@@ -396,15 +340,11 @@ def process_network_requests(requests: list[dict], output_dir: str | None = None
     return timeline_requests, detection_stats
 
 
-def compile_workspace(
-    session_data: dict,
-    full_video_path: str | None = None,
-    video_start_unix: float | None = None,
-) -> bool:
+def compile_workspace(session_data: dict) -> bool:
     rule("Compiling Workspace", style="bold cyan")
     info("Extracting data...")
 
-    _, OUTPUT_DIR, CLIPS_DIR, REQUESTS_DIR = _get_paths()
+    _, OUTPUT_DIR, REQUESTS_DIR = _get_paths()
     STAGING_DIR = OUTPUT_DIR + "_new"
     PREV_DIR = OUTPUT_DIR + "_prev"
 
@@ -412,12 +352,10 @@ def compile_workspace(
         if os.path.exists(STAGING_DIR):
             shutil.rmtree(STAGING_DIR)
         os.makedirs(STAGING_DIR, exist_ok=True)
-        os.makedirs(os.path.join(STAGING_DIR, "clips"), exist_ok=True)
         os.makedirs(os.path.join(STAGING_DIR, "requests"), exist_ok=True)
 
         # Override paths to write into staging dir
         OUTPUT_DIR = STAGING_DIR
-        CLIPS_DIR = os.path.join(STAGING_DIR, "clips")
         REQUESTS_DIR = os.path.join(STAGING_DIR, "requests")
 
         metadata = session_data.get("metadata", {})
@@ -426,7 +364,7 @@ def compile_workspace(
         timeline_events = []
 
         if actions:
-            actions = merge_and_annotate_actions(actions, full_video_path, video_start_unix, clips_dir=CLIPS_DIR)
+            actions = _sort_actions(actions)
             for action in actions:
                 timeline_events.append(
                     {
@@ -437,25 +375,18 @@ def compile_workspace(
                         "details": {
                             k: v
                             for k, v in action.items()
-                            if k
-                            not in [
+                            if k not in [
                                 "timestamp_unix",
                                 "timestamp_iso",
                                 "type",
                                 "ai_macro_summary",
                                 "ai_elements_interacted",
                                 "ai_action_success",
-                                "ai_video_file",
-                                "video_start_sec",
-                                "video_end_sec",
                             ]
                         },
                         "ai_macro_summary": action.get("ai_macro_summary"),
                         "ai_elements_interacted": action.get("ai_elements_interacted"),
                         "ai_action_success": action.get("ai_action_success"),
-                        "ai_video_file": action.get("ai_video_file"),
-                        "video_start_sec": action.get("video_start_sec"),
-                        "video_end_sec": action.get("video_end_sec"),
                     }
                 )
 
@@ -523,7 +454,7 @@ def compile_workspace(
             json.dump(make_serializable(metadata), f, indent=2)
 
         # Atomic swap: staging → final (old session preserved until new one is ready)
-        _, final_output, _, _ = _get_paths()
+        _, final_output, _ = _get_paths()
         if os.path.exists(PREV_DIR):
             shutil.rmtree(PREV_DIR)
         if os.path.exists(final_output):
