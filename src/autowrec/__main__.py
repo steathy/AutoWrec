@@ -79,6 +79,8 @@ def _apply_config_overrides(args):
         config.REDACT_SENSITIVE = True
     if getattr(args, "verbose", False):
         config.VERBOSE = True
+    if getattr(args, "proxy", None):
+        config.PROXY_URL = args.proxy
 
 
 def cmd_record(args):
@@ -144,6 +146,7 @@ def _print_rich_help():
     t3.add_column(style="bold", min_width=16)
     t3.add_column()
     t3.add_row("  recording", "Blocklist and redaction settings")
+    t3.add_row("  proxy", "HTTP/SOCKS5 proxy for browser traffic")
     t3.add_row("  banner", "Startup animation toggle and speed")
     t3.add_row("  output", "Root directory for all generated output")
     console.print(t3)
@@ -159,6 +162,7 @@ def _print_rich_help():
     t4.add_row("--no-blocklist", "Disable ad/tracker domain filtering")
     t4.add_row("--redact", "Redact passwords, auth headers, and cookies")
     t4.add_row("--verbose", "Show detailed diagnostic output")
+    t4.add_row("--proxy URL", "Proxy for browser traffic (http, socks4, socks5)")
     t4.add_row("-V, --version", "Show version")
     t4.add_row("-h, --help", "Show this help message")
     console.print(t4)
@@ -218,6 +222,7 @@ def main():
         p.add_argument("--no-blocklist", action="store_true", default=False)
         p.add_argument("--redact", action="store_true", default=False)
         p.add_argument("--verbose", action="store_true", default=False)
+        p.add_argument("--proxy", metavar="URL", help="Proxy URL (http://host:port or socks5://host:port)")
         p.add_argument("-h", "--help", action="store_true", default=False, dest="help_flag")
         p.add_argument("-V", "--version", action="store_true", default=False)
 

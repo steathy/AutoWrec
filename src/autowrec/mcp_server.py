@@ -113,6 +113,7 @@ def _build_server():
     @mcp.tool()
     def record_session(
         url: Annotated[str, "The starting URL to navigate to"] = "about:blank",
+        proxy: Annotated[str | None, "Proxy URL (e.g. 'http://host:port', 'socks5://host:port'). Auth: 'http://user:pass@host:port'"] = None,
     ) -> str:
         """Launch Chrome with CDP capture and return immediately. Poll
         check_recording until the user closes the browser, then explore
@@ -123,6 +124,10 @@ def _build_server():
             return "A recording is already in progress. Close the browser to finish it, or call check_recording for status."
 
         config.ensure_output_dirs()
+
+        saved_proxy = config.PROXY_URL
+        if proxy:
+            config.PROXY_URL = proxy
 
         _state["recording_error"] = None
         _state["workspace"] = None
@@ -136,6 +141,8 @@ def _build_server():
                     _state["recording_error"] = "Recording failed or produced no output."
             except Exception as exc:
                 _state["recording_error"] = str(exc)
+            finally:
+                config.PROXY_URL = saved_proxy
 
         thread = threading.Thread(target=_run_in_background, daemon=True)
         thread.start()

@@ -80,7 +80,7 @@ def run_recording(url: str = "about:blank") -> str | bool:
 
     blocklist = _init_blocklist()
 
-    _browser_agent = BrowserAgent(blocklist=blocklist)
+    _browser_agent = BrowserAgent(blocklist=blocklist, proxy_url=config.PROXY_URL)
 
     rule("STARTING RECORDER", style="bold cyan")
     info(f"Target URL : {url}")
@@ -88,6 +88,14 @@ def run_recording(url: str = "about:blank") -> str | bool:
         info(f"Blocklist  : {blocklist.total_enabled_domains()} domains loaded")
     else:
         info("Blocklist  : disabled")
+    if _browser_agent.proxy_url:
+        from urllib.parse import urlparse
+        from .browser_agent import BrowserAgent as _BA
+        _p = urlparse(_browser_agent.proxy_url)
+        _masked = f"{_p.scheme}://{_BA._proxy_netloc(_p)}"
+        if _browser_agent._proxy_creds:
+            _masked += " (authenticated)"
+        info(f"Proxy      : {_masked}")
     info("Press Ctrl+C or close the browser to stop recording")
     rule(style="bold cyan")
 

@@ -46,10 +46,33 @@ class TimestampConverter:
 class BrowserAgent:
     """Manages the headless/UI browser session, CDP event handlers, and data collection."""
 
-    def __init__(self, telemetry_js_path=None, blocklist: BlocklistDB | None = None):
+    def __init__(self, telemetry_js_path=None, blocklist: BlocklistDB | None = None, proxy_url: str | None = None):
         _js_dir = os.path.join(os.path.dirname(__file__), "js")
         self.telemetry_js_path = telemetry_js_path or os.path.join(_js_dir, "telemetry.js")
         self.blocklist = blocklist
+        self.proxy_url = proxy_url
+        self._proxy_creds: tuple[str, str] | None = None
+        self._proxy_auth_failed: set[str] = set()
+        if proxy_url:
+            from urllib.parse import urlparse, unquote
+            parsed = urlparse(proxy_url)
+            if parsed.scheme not in ("http", "https", "socks5", "socks4"):
+                warn(f"Unsupported proxy scheme {parsed.scheme!r} — ignoring proxy. Use http://, https://, or socks5://")
+                self.proxy_url = None
+            elif not parsed.hostname:
+                warn(f"Invalid proxy URL (no hostname) — ignoring proxy")
+                self.proxy_url = None
+            else:
+                try:
+                    _ = parsed.port
+                except ValueError:
+                    warn(f"Invalid proxy port — ignoring proxy")
+                    self.proxy_url = None
+            if self.proxy_url and parsed.username:
+                if parsed.scheme.lower().startswith("http"):
+                    self._proxy_creds = (unquote(parsed.username), unquote(parsed.password or ""))
+                else:
+                    warn(f"Proxy credentials ignored — {parsed.scheme} does not support CDP-based auth. Use IP whitelisting.")
         self.recording_active = False
         self.browser = None
         self.tab = None
@@ -95,6 +118,14 @@ class BrowserAgent:
         if len(self._skipped_ids) > self._SKIPPED_LRU_MAX:
             self._skipped_ids.popitem(last=False)
         self.orphan_extra_info.pop(request_id, None)
+
+    @staticmethod
+    def _proxy_netloc(parsed) -> str:
+        """Format hostname:port, re-wrapping IPv6 brackets that urlparse strips."""
+        host = parsed.hostname or ""
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        return f"{host}:{parsed.port}" if parsed.port else host
 
     def _load_scripts(self) -> bool:
         """Loads the injected JavaScript files from disk."""
@@ -399,6 +430,33 @@ class BrowserAgent:
             self.orphan_extra_info[event.request_id]["received"] = cookie_data
             self.orphan_extra_info[event.request_id]["raw_headers"] = headers
 
+    async def _handle_proxy_auth(self, event: cdp.fetch.AuthRequired):
+        await self._handle_proxy_auth_for(self.tab, event)
+
+    async def _handle_proxy_auth_for(self, sender, event: cdp.fetch.AuthRequired):
+        if getattr(event.auth_challenge, "source", None) != "Proxy":
+            await sender.send(cdp.fetch.continue_with_auth(
+                request_id=event.request_id,
+                auth_challenge_response=cdp.fetch.AuthChallengeResponse(response="Default"),
+            ))
+            return
+        if not self._proxy_creds or event.request_id in self._proxy_auth_failed:
+            await sender.send(cdp.fetch.continue_with_auth(
+                request_id=event.request_id,
+                auth_challenge_response=cdp.fetch.AuthChallengeResponse(response="CancelAuth"),
+            ))
+            return
+        self._proxy_auth_failed.add(event.request_id)
+        username, password = self._proxy_creds
+        await sender.send(cdp.fetch.continue_with_auth(
+            request_id=event.request_id,
+            auth_challenge_response=cdp.fetch.AuthChallengeResponse(
+                response="ProvideCredentials",
+                username=username,
+                password=password,
+            ),
+        ))
+
     async def target_created_handler(self, event: cdp.target.AttachedToTarget):
         target_info = event.target_info
 
@@ -463,6 +521,14 @@ class BrowserAgent:
                 tab_session.add_handler(cdp.network.RequestWillBeSentExtraInfo, self.req_extra_info)
                 tab_session.add_handler(cdp.network.ResponseReceivedExtraInfo, self.res_extra_info)
 
+                if self._proxy_creds:
+                    await tab_session.send(cdp.fetch.enable(patterns=[], handle_auth_requests=True))
+                    def _make_auth_handler(ts):
+                        async def handler(event: cdp.fetch.AuthRequired):
+                            await self._handle_proxy_auth_for(ts, event)
+                        return handler
+                    tab_session.add_handler(cdp.fetch.AuthRequired, _make_auth_handler(tab_session))
+
                 # Inject the JS scripts so actions in the new tab are also recorded
                 await tab_session.send(
                     cdp.page.add_script_to_evaluate_on_new_document(source=self.telemetry_script, run_immediately=True)
@@ -483,7 +549,13 @@ class BrowserAgent:
             return {}
 
         try:
-            self.browser = await zd.start(headless=False, browser_args=["--incognito", "--disable-popup-blocking"])
+            browser_args = ["--incognito", "--disable-popup-blocking"]
+            if self.proxy_url:
+                from urllib.parse import urlparse, urlunparse
+                parsed = urlparse(self.proxy_url)
+                clean = urlunparse((parsed.scheme, self._proxy_netloc(parsed), "", "", "", ""))
+                browser_args.append(f"--proxy-server={clean}")
+            self.browser = await zd.start(headless=False, browser_args=browser_args)
             self.recording_start = datetime.now(UTC)
             self.recording_active = True
 
@@ -506,6 +578,10 @@ class BrowserAgent:
             self.tab.add_handler(cdp.network.LoadingFailed, self.loading_failed_handler)
             self.tab.add_handler(cdp.network.RequestWillBeSentExtraInfo, self.req_extra_info)
             self.tab.add_handler(cdp.network.ResponseReceivedExtraInfo, self.res_extra_info)
+
+            if self._proxy_creds:
+                await self.tab.send(cdp.fetch.enable(patterns=[], handle_auth_requests=True))
+                self.tab.add_handler(cdp.fetch.AuthRequired, self._handle_proxy_auth)
 
             from .. import config as _cfg
             redact_js = f"window.__autowrec_redact = {'true' if _cfg.REDACT_SENSITIVE else 'false'};"

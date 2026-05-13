@@ -10,6 +10,7 @@ Import this module from anywhere in the project:
 Priority chain:  CLI flag  >  ~/.autowrec/config.toml  >  hardcoded default
 """
 
+import os
 import tomllib
 from pathlib import Path
 
@@ -54,6 +55,11 @@ BANNER_SPEED = 1.0
 
 VERBOSE = False
 
+# ── Proxy ──────────────────────────────────────────────────────────────────
+# Format: http://host:port, http://user:pass@host:port, socks5://host:port
+# Priority: --proxy CLI flag > AUTOWREC_PROXY env var > [proxy] config.toml
+PROXY_URL: str | None = os.environ.get("AUTOWREC_PROXY")
+
 
 # ── Default config.toml content ─────────────────────────────────────────────
 
@@ -88,6 +94,20 @@ speed   = 1.0
 # Relative paths are resolved from the directory where you run `autowrec`.
 # dir = "output"
 
+[proxy]
+# HTTP/HTTPS/SOCKS5 proxy for all browser traffic.
+# Format: scheme://[user:pass@]host:port
+# Examples:
+#   url = "http://proxy.corp.example.com:8080"
+#   url = "http://user:secret@proxy.example.com:3128"
+#   url = "socks5://127.0.0.1:1080"
+#
+# NOTE: SOCKS5 with username:password auth is NOT supported by Chrome.
+# Use IP whitelisting or a local proxy forwarder for authenticated SOCKS5.
+#
+# Can also be set via AUTOWREC_PROXY environment variable.
+# url = ""
+
 """
 
 
@@ -101,7 +121,7 @@ def _load_config_toml():
     Silently skips if the file is missing or unparseable.
     Tolerates unknown sections from older config files.
     """
-    global SANDBOX_TIMEOUT_SECONDS
+    global SANDBOX_TIMEOUT_SECONDS, PROXY_URL
     global REDACT_SENSITIVE, BLOCKLIST_ENABLED
     global BANNER_ENABLED, BANNER_SPEED
     global OUTPUT_DIR, WORKSPACE_DIR, BLOCKLIST_DIR, BLOCKLIST_DB
@@ -186,6 +206,15 @@ def _load_config_toml():
                 print("[WARN] output.dir is empty, using default", file=sys.stderr)
         else:
             print(f"[WARN] output.dir must be a string, got {type(dir_val).__name__}: {dir_val!r}. Using default.", file=sys.stderr)
+
+    # [proxy]
+    proxy = _safe_table(data, "proxy")
+    if "url" in proxy:
+        proxy_val = proxy["url"]
+        if isinstance(proxy_val, str) and proxy_val.strip():
+            PROXY_URL = PROXY_URL or proxy_val.strip()
+        elif not isinstance(proxy_val, str):
+            print(f"[WARN] proxy.url must be a string, got {type(proxy_val).__name__}. Ignoring.", file=sys.stderr)
 
     # Range validation
     SANDBOX_TIMEOUT_SECONDS = max(1, SANDBOX_TIMEOUT_SECONDS)
