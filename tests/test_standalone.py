@@ -90,11 +90,8 @@ def run_tests():
 
     from autowrec import config
 
-    check("VERSION is set", config.VERSION == "1.3.2")
-    check("FPS default", config.FPS == 3)
-    check("SEGMENT_PAD_SECONDS default", config.SEGMENT_PAD_SECONDS == 2)
+    check("VERSION is set", config.VERSION == "1.4.0")
     check("SANDBOX_TIMEOUT_SECONDS default", config.SANDBOX_TIMEOUT_SECONDS == 60)
-    check("MCP_VIDEO_ENABLED default", config.MCP_VIDEO_ENABLED is False)
     check("AGENT_MODEL removed", not hasattr(config, "AGENT_MODEL"))
     check("RECORDER_AI_MODEL removed", not hasattr(config, "RECORDER_AI_MODEL"))
     check("API_BASE removed", not hasattr(config, "API_BASE"))
@@ -111,7 +108,7 @@ def run_tests():
     async def test_tools():
         tools = await mcp.list_tools()
         tool_names = {t.name for t in tools}
-        check("9 tools registered", len(tools) == 9, f"got {len(tools)}")
+        check("8 tools registered", len(tools) == 8, f"got {len(tools)}")
         check("record_session tool", "record_session" in tool_names)
         check("check_recording tool", "check_recording" in tool_names)
         check("read_session_summary tool", "read_session_summary" in tool_names)
@@ -119,7 +116,6 @@ def run_tests():
         check("read_transaction tool", "read_transaction" in tool_names)
         check("list_workspace_files tool", "list_workspace_files" in tool_names)
         check("read_file tool", "read_file" in tool_names)
-        check("extract_video_frames tool", "extract_video_frames" in tool_names)
         check("execute_code tool", "execute_code" in tool_names)
         for t in tools:
             check(f"  {t.name} has description", bool(t.description))
@@ -160,7 +156,6 @@ def run_tests():
     fake_workspace = tempfile.mkdtemp(prefix="autowrec_ws_")
     fake_session = os.path.join(fake_workspace, "session_dump")
     os.makedirs(os.path.join(fake_session, "requests", "000_GET_example.com"), exist_ok=True)
-    os.makedirs(os.path.join(fake_session, "clips"), exist_ok=True)
 
     summary_data = {
         "session": {"duration_seconds": 30.0},
@@ -356,19 +351,11 @@ def run_tests():
     section("8. Data Compressor (no AI deps)")
     # ─────────────────────────────────────────────────────────────────────────
 
-    from autowrec.recorder.data_compressor import merge_and_annotate_actions
+    from autowrec.recorder.data_compressor import _sort_actions
 
-    actions = [
-        {"timestamp_unix": 100.0, "type": "click", "text": "button"},
-        {"timestamp_unix": 101.0, "type": "input", "value": "hello"},
-        {"timestamp_unix": 105.0, "type": "click", "text": "submit"},
-    ]
-
-    result = merge_and_annotate_actions(actions, None, None)
-    check("merge_and_annotate no video", len(result) == 3)
-
-    result = merge_and_annotate_actions(actions, "/nonexistent.mp4", 99.0)
-    check("merge_and_annotate missing video", len(result) == 3)
+    unsorted = [{"timestamp_unix": 3}, {"timestamp_unix": 1}, {"timestamp_unix": 2}]
+    _sort_actions(unsorted)
+    check("_sort_actions orders by timestamp", [a["timestamp_unix"] for a in unsorted] == [1, 2, 3])
 
     # ─────────────────────────────────────────────────────────────────────────
     section("9. Config Validation")
@@ -380,29 +367,21 @@ def run_tests():
     bad_config_dir = tempfile.mkdtemp(prefix="autowrec_badcfg_")
     bad_config_file = os.path.join(bad_config_dir, "config.toml")
     with open(bad_config_file, "w") as f:
-        f.write('[recording]\nfps = "fast"\nsegment_pad = "broken"\n\n[banner]\nspeed = "slow"\n')
+        f.write('[banner]\nspeed = "slow"\n')
 
     saved_config_file = cfg.CONFIG_FILE
-    saved_fps = cfg.FPS
-    saved_pad = cfg.SEGMENT_PAD_SECONDS
     saved_speed = cfg.BANNER_SPEED
     try:
         from pathlib import Path
         cfg.CONFIG_FILE = Path(bad_config_file)
-        cfg.FPS = 3
-        cfg.SEGMENT_PAD_SECONDS = 2.0
         cfg.BANNER_SPEED = 1.0
         cfg._load_config_toml()
         check("bad config survives import", True)
-        check("bad fps keeps default", cfg.FPS == 3, f"got {cfg.FPS}")
-        check("bad segment_pad keeps default", cfg.SEGMENT_PAD_SECONDS == 2.0, f"got {cfg.SEGMENT_PAD_SECONDS}")
         check("bad speed keeps default", cfg.BANNER_SPEED == 1.0, f"got {cfg.BANNER_SPEED}")
     except Exception as e:
         check("bad config survives import", False, str(e))
     finally:
         cfg.CONFIG_FILE = saved_config_file
-        cfg.FPS = saved_fps
-        cfg.SEGMENT_PAD_SECONDS = saved_pad
         cfg.BANNER_SPEED = saved_speed
     shutil.rmtree(bad_config_dir, ignore_errors=True)
 
@@ -418,17 +397,14 @@ def run_tests():
     saved_blocklist_db = cfg.BLOCKLIST_DB
     try:
         cfg.CONFIG_FILE = Path(bad2_file)
-        cfg.FPS = 3
         cfg.OUTPUT_DIR = saved_output_dir
         cfg._load_config_toml()
         check("non-table section survives", True)
-        check("FPS unchanged by scalar section", cfg.FPS == 3, f"got {cfg.FPS}")
         check("output.dir rejects int", cfg.OUTPUT_DIR == saved_output_dir, f"got {cfg.OUTPUT_DIR}")
     except Exception as e:
         check("non-table section survives", False, str(e))
     finally:
         cfg.CONFIG_FILE = saved_config_file
-        cfg.FPS = saved_fps
         cfg.OUTPUT_DIR = saved_output_dir
         cfg.WORKSPACE_DIR = saved_workspace_dir
         cfg.BLOCKLIST_DIR = saved_blocklist_dir
@@ -447,8 +423,6 @@ def run_tests():
     check("CLI timeout=-10 clamped to 1", cfg.SANDBOX_TIMEOUT_SECONDS == 1, f"got {cfg.SANDBOX_TIMEOUT_SECONDS}")
     cfg.SANDBOX_TIMEOUT_SECONDS = saved_timeout
 
-    check("FPS range validation", cfg.FPS >= 1, f"got {cfg.FPS}")
-    check("SEGMENT_PAD >= 0", cfg.SEGMENT_PAD_SECONDS >= 0)
     check("SANDBOX_TIMEOUT >= 1", cfg.SANDBOX_TIMEOUT_SECONDS >= 1)
     check("BANNER_SPEED > 0", cfg.BANNER_SPEED > 0)
     check("REDACT_SENSITIVE exists", hasattr(cfg, "REDACT_SENSITIVE"))
@@ -584,73 +558,6 @@ def run_tests():
     asyncio.run(test_binary_body())
     shutil.rmtree(bin_workspace, ignore_errors=True)
     _mcp_state["workspace"] = None
-
-    # ─────────────────────────────────────────────────────────────────────────
-    section("13. Video Startup Failure Cleanup")
-    # ─────────────────────────────────────────────────────────────────────────
-
-    from unittest.mock import patch, MagicMock
-    import autowrec.recorder as _rec_mod
-    from autowrec.recorder.video_recorder import ActionVideoRecorder
-    from autowrec import console as _console_mod
-    from rich.console import Console as _RichConsole
-    from pathlib import Path as _Path
-
-    # Create isolated temp dir for this test
-    vf_dir = tempfile.mkdtemp(prefix="autowrec_vfail_")
-    vf_fd, vf_path = tempfile.mkstemp(suffix=".mp4", prefix="autowrec_", dir=vf_dir)
-    os.close(vf_fd)
-
-    # Isolate config output paths
-    _test_output = tempfile.mkdtemp(prefix="autowrec_testout_")
-    _saved_output = cfg.OUTPUT_DIR
-    _saved_ws = cfg.WORKSPACE_DIR
-    _saved_bl_dir = cfg.BLOCKLIST_DIR
-    _saved_bl_db = cfg.BLOCKLIST_DB
-    cfg.OUTPUT_DIR = _Path(_test_output)
-    cfg.WORKSPACE_DIR = _Path(_test_output) / "workspace"
-    cfg.BLOCKLIST_DIR = _Path(_test_output) / "blocklist"
-    cfg.BLOCKLIST_DB = _Path(_test_output) / "blocklist.db"
-
-    # Redirect console to avoid encoding errors during test
-    _saved_console = _console_mod.console
-    _console_mod.console = _RichConsole(theme=_console_mod._theme, highlight=False, file=io.StringIO())
-
-    def fake_mkstemp(*args, **kwargs):
-        return (99, vf_path)
-
-    try:
-        with patch.object(_rec_mod.tempfile, "mkstemp", side_effect=fake_mkstemp), \
-             patch.object(_rec_mod.os, "close", return_value=None), \
-             patch.object(ActionVideoRecorder, "start", return_value=False), \
-             patch.object(_rec_mod, "_init_blocklist", return_value=None), \
-             patch.object(_rec_mod, "compile_workspace", return_value=True), \
-             patch.object(_rec_mod, "BrowserAgent") as mock_ba:
-            mock_ba_inst = MagicMock()
-            mock_ba_inst.stats = {"blocked_by_blocklist": 0}
-            async def fake_session(*a, **kw):
-                return {"metadata": {}, "requests": [], "actions": []}
-            mock_ba_inst.run_session = fake_session
-            mock_ba.return_value = mock_ba_inst
-
-            result = _rec_mod.run_recording(url="about:blank", enable_video=True)
-
-        check("video startup fail cleans temp file", not os.path.exists(vf_path))
-        # Verify no full_record.mp4 was promoted (video never started)
-        session_dump = os.path.join(_test_output, "workspace", "session_dump")
-        promoted = os.path.join(session_dump, "full_record.mp4")
-        check("no invalid video promoted to workspace", not os.path.exists(promoted))
-    except Exception as e:
-        check("video startup fail test ran", False, str(e))
-    finally:
-        _console_mod.console = _saved_console
-        cfg.OUTPUT_DIR = _saved_output
-        cfg.WORKSPACE_DIR = _saved_ws
-        cfg.BLOCKLIST_DIR = _saved_bl_dir
-        cfg.BLOCKLIST_DB = _saved_bl_db
-
-    shutil.rmtree(vf_dir, ignore_errors=True)
-    shutil.rmtree(_test_output, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────────
     section("RESULTS")

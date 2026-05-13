@@ -56,7 +56,7 @@ def main():
 
     from autowrec.recorder import run_recording
 
-    result = run_recording(url=url, enable_video=True)
+    result = run_recording(url=url)
 
     if not result:
         print("\n  [ERROR] Recording failed or produced no output.")
@@ -153,18 +153,6 @@ def main():
                 print(f"{indent}  {f} ({size:,} bytes)")
             if len(files) > 20:
                 print(f"{indent}  ... and {len(files) - 20} more files")
-
-    # VIDEO CLIPS
-    clips_dir = os.path.join(workspace, "clips")
-    if os.path.exists(clips_dir):
-        clips = os.listdir(clips_dir)
-        if clips:
-            print(f"\n  Video Clips: {len(clips)} segments captured")
-            for c in sorted(clips)[:5]:
-                size = os.path.getsize(os.path.join(clips_dir, c))
-                print(f"    {c} ({size:,} bytes)")
-            if len(clips) > 5:
-                print(f"    ... and {len(clips) - 5} more")
 
     print(f"""
 {'=' * 60}

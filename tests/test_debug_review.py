@@ -52,44 +52,6 @@ def section(title):
 
 def main():
     # ─────────────────────────────────────────────────────────────────────
-    section("1. _get_process_tree finds child PIDs (post-C1 fix)")
-    # ─────────────────────────────────────────────────────────────────────
-    # Windows 11 24H2/25H2 ships without wmic. After C1, the function uses
-    # PowerShell Get-CimInstance and should find children of the current
-    # process even when wmic is absent.
-
-    from autowrec.recorder.video_recorder import _get_process_tree
-
-    if sys.platform == "win32":
-        # Spawn a real child so we have something to discover.
-        child = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(20)"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        try:
-            time.sleep(0.5)  # let CIM see the new process
-            tree = _get_process_tree(os.getpid())
-            check(
-                "C1: _get_process_tree contains current PID",
-                os.getpid() in tree,
-                f"got {tree}",
-            )
-            check(
-                "C1: _get_process_tree finds spawned child PID",
-                child.pid in tree,
-                f"child={child.pid}, tree={tree}",
-            )
-        finally:
-            child.terminate()
-            try:
-                child.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                child.kill()
-    else:
-        skip("_get_process_tree test", "non-Windows platform")
-
-    # ─────────────────────────────────────────────────────────────────────
     section("2. orphan_extra_info short-circuits for blocked IDs (post-B1)")
     # ─────────────────────────────────────────────────────────────────────
     # After B1, request_handler marks blocked / data: request_ids in a
@@ -434,39 +396,6 @@ def main():
     shutil.rmtree(big_ws, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────
-    section("6. extract_video_frames duration math (post-B2)")
-    # ─────────────────────────────────────────────────────────────────────
-    # After B2: very short clips degrade to a single mid-clip sample, and
-    # longer clips spread N timestamps inside a small end_pad.
-
-    def _b2_timestamps(duration, num_frames):
-        if duration < 0.5 or num_frames == 1:
-            return [duration / 2]
-        end_pad = min(0.05, duration * 0.02)
-        span = max(duration - 2 * end_pad, 0.001)
-        return [end_pad + span * (i + 0.5) / num_frames for i in range(num_frames)]
-
-    tiny = _b2_timestamps(0.05, 4)
-    check(
-        "B2: tiny clip degrades to one frame",
-        len(tiny) == 1,
-        f"got {tiny}",
-    )
-
-    normal = _b2_timestamps(10.0, 4)
-    distinct = len(set(round(t, 4) for t in normal))
-    check(
-        "B2: normal clip has all distinct timestamps",
-        distinct == 4,
-        f"got {normal}",
-    )
-    check(
-        "B2: normal-clip timestamps stay strictly inside [0, duration]",
-        all(0 < t < 10.0 for t in normal),
-        f"got {normal}",
-    )
-
-    # ─────────────────────────────────────────────────────────────────────
     section("7. compile_workspace cleans staging on failure (post-B4)")
     # ─────────────────────────────────────────────────────────────────────
     # After B4, a mid-compile exception removes session_dump_new/.
@@ -489,8 +418,6 @@ def main():
     try:
         ok = dc.compile_workspace(
             session_data={"metadata": {}, "actions": [], "requests": [{"url": "https://x", "method": "GET"}]},
-            full_video_path=None,
-            video_start_unix=None,
         )
         check("B4: compile failure returns False", ok is False)
 
@@ -934,15 +861,6 @@ def main():
         "P1: max_total_buffer_size lowered to 250 MB",
         "max_total_buffer_size=250 * 1024 * 1024" in ba_src
         and "max_total_buffer_size=1000 * 1024 * 1024" not in ba_src,
-    )
-
-    # P3: confirm video recorder writes screenshot.bgra directly.
-    import autowrec.recorder.video_recorder as vr
-    vr_src = inspect.getsource(vr)
-    check(
-        "P3: _record_loop writes screenshot.bgra (skips np.array)",
-        "writer.send(screenshot.bgra)" in vr_src
-        and "np.array(screenshot).tobytes()" not in vr_src,
     )
 
     # P5: transaction.json + timeline.json written with compact separators.
