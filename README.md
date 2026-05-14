@@ -191,12 +191,8 @@ support needed for proxy auth. AutoWrec checks the Chrome version automatically.
 - If your system Chrome is < 137, it's used directly (no extra download).
 - Otherwise, use the `download_chrome` MCP tool:
   - **Windows/macOS:** downloads consumer Chrome 136 (auto-extraction on Windows; manual on macOS).
-  - **Linux:** downloads a pinned Chrome for Testing 136 fallback (consumer build unavailable). May be weaker for anti-bot evasion.
+  - **Linux:** downloads consumer Chrome 136 .deb from UChicago CS mirror (auto-extraction with `dpkg-deb`; Chrome for Testing fallback if mirror unavailable).
 - Or pass the path to any Chrome < 137 via `--chrome-path` CLI flag or MCP `chrome_path`.
-
-**Linux note:** Consumer Chrome 136 is no longer available for download from Google.
-The `download_chrome` tool provides a Chrome for Testing 136 fallback for Linux, which
-may be more detectable by anti-bot systems than consumer Chrome.
 
 **Priority:** `--proxy` CLI flag or MCP `record_session(proxy=...)` parameter >
 `AUTOWREC_PROXY` env var > `[proxy] url` in config.toml.

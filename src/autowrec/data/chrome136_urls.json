@@ -1,7 +1,7 @@
 {
   "_comment": "Chrome 136 consumer builds with pinned SHA-256. Used by download_chrome MCP tool.",
   "_source": "https://github.com/ulixee/chrome-versions",
-  "_note": "Linux consumer builds no longer available from Google. Linux entries use Chrome for Testing (may trigger anti-bot detection).",
+  "_note": "Linux consumer build from UChicago CS mirror. Chrome for Testing fallback if mirror unavailable.",
   "win64": {
     "version": "136.0.7103.114",
     "url": "https://dl.google.com/release2/chrome/ii74n6hkryhvtp67bbscqhvh2i_136.0.7103.114/136.0.7103.114_chrome_installer.exe",
@@ -32,10 +32,13 @@
   },
   "linux": {
     "version": "136.0.7103.113",
-    "url": "https://storage.googleapis.com/chrome-for-testing-public/136.0.7103.113/linux64/chrome-linux64.zip",
-    "sha256": "a9ec3b5f654745360095f4e066b6b78442e56fe4124831051449813e5c4e0f95",
-    "format": "zip",
-    "warning": "Chrome for Testing build — consumer Linux build no longer available from Google. May trigger anti-bot detection.",
-    "chrome_path": "~/.autowrec/chrome/chrome-linux64/chrome"
+    "url": "https://mirror.cs.uchicago.edu/google-chrome/pool/main/g/google-chrome-stable/google-chrome-stable_136.0.7103.113-1_amd64.deb",
+    "sha256": "06728abbb5f7e20fb3838ac3aa35574f72b1d84f069f910baacdcb412dc60a48",
+    "format": "deb",
+    "extract_instructions": "dpkg-deb -x google-chrome-stable_136.0.7103.113-1_amd64.deb ~/.autowrec/chrome/",
+    "chrome_path": "~/.autowrec/chrome/opt/google/chrome/chrome",
+    "fallback_url": "https://storage.googleapis.com/chrome-for-testing-public/136.0.7103.113/linux64/chrome-linux64.zip",
+    "fallback_sha256": "a9ec3b5f654745360095f4e066b6b78442e56fe4124831051449813e5c4e0f95",
+    "fallback_note": "Chrome for Testing — use if mirror is unavailable. May trigger anti-bot detection."
   }
 }

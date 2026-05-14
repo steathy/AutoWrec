@@ -651,6 +651,43 @@ def _build_server():
                 import shutil
                 if os.path.isdir(stage1):
                     shutil.rmtree(stage1, ignore_errors=True)
+        elif _sys.platform == "linux" and installer_path.endswith(".deb"):
+            import shutil as _shutil
+            dpkg_deb = _shutil.which("dpkg-deb")
+            if not dpkg_deb:
+                msg = f"Downloaded to {installer_path}.\n"
+                msg += "dpkg-deb not found — install dpkg or extract manually:\n"
+                if extract_instructions:
+                    msg += f"  {extract_instructions}\n"
+                if chrome_path_hint:
+                    msg += f"Then pass as chrome_path:\n  {chrome_path_hint}"
+                return msg
+            try:
+                subprocess.run([dpkg_deb, "-x", installer_path, dest],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=60, check=True)
+                # Disable update mechanisms (cron scripts, update schedulers)
+                for update_path in [
+                    os.path.join(dest, "opt", "google", "chrome", "cron"),
+                    os.path.join(dest, "etc", "cron.daily"),
+                ]:
+                    if os.path.isdir(update_path):
+                        _shutil.rmtree(update_path, ignore_errors=True)
+                etc_dir = os.path.join(dest, "etc")
+                if os.path.isdir(etc_dir):
+                    try:
+                        os.rmdir(etc_dir)
+                    except OSError:
+                        pass
+                try:
+                    os.remove(installer_path)
+                except OSError:
+                    pass
+            except subprocess.CalledProcessError as exc:
+                return (f"Extraction failed: {exc}\nExtract manually with:\n"
+                        f"  dpkg-deb -x {installer_path} {dest}")
+            except Exception as exc:
+                return f"Extraction error: {exc}"
         else:
             msg = f"Downloaded to {installer_path}.\n"
             if warning:
@@ -658,7 +695,7 @@ def _build_server():
             if extract_instructions:
                 msg += f"Extract with:\n  {extract_instructions}\n"
             else:
-                msg += "Auto-extraction is only supported on Windows. Extract manually.\n"
+                msg += "Auto-extraction not supported on this platform. Extract manually.\n"
             if chrome_path_hint:
                 msg += f"Then pass as chrome_path:\n  {chrome_path_hint}"
             else:
@@ -675,7 +712,7 @@ def _build_server():
                 return f"Extracted Chrome {ver} but need < 137. The download URL may be wrong."
             return (f"Chrome {ver} ready at: {chrome_exe}\n"
                     f"Pass this as chrome_path to record_session.")
-        return f"Extracted to {dest}, but could not locate chrome.exe."
+        return f"Extracted to {dest}, but could not locate chrome binary."
 
     # Expose the sandbox factory via _state so external callers (notably the
     # warmup thread in run_mcp_server) can trigger creation without changing

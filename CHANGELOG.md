@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.5.2] — 2026-05-13
+
+### Added
+
+- **Linux consumer Chrome 136 support.** `download_chrome` now downloads the
+  consumer .deb from UChicago CS mirror and auto-extracts with `dpkg-deb`.
+  Chrome for Testing remains as fallback if the mirror is unavailable.
+- **Linux auto-extraction** in `download_chrome` MCP tool — extracts .deb with
+  `dpkg-deb -x` and removes cron update scripts automatically.
+
+### Changed
+
+- `chrome136_urls.json` Linux entry updated from Chrome for Testing .zip to
+  consumer .deb with new SHA-256 hash.
+
 ## [1.5.1] — 2026-05-14
 
 ### Fixed
@@ -21,11 +36,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   CLI flag. General Chrome binary override — also used for auth proxy gating.
 - **`download_chrome` MCP tool** downloads Chrome 136 to `~/.autowrec/chrome/`
   with SHA-256 verification. Windows auto-extraction via 7-Zip.
-
-### Notes
-
-- Linux: consumer Chrome 136 no longer available from Google. `download_chrome`
-  provides a Chrome for Testing fallback with anti-bot warning.
 
 ## [1.5.0] — 2026-05-13
 
