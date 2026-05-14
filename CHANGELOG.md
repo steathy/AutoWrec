@@ -6,6 +6,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
+## [1.5.1] — 2026-05-14
+
+### Fixed
+
+- **Authenticated proxy support reworked.** CDP `Fetch.authRequired` does not
+  work for HTTPS CONNECT tunnel auth. Replaced with Chrome extension approach
+  (`chrome.webRequest.onAuthRequired`) using `--proxy-server` for routing and
+  an auth-only extension for credentials. Requires Chrome < 137.
+
+### Added
+
+- **`chrome_path` parameter** on `record_session` MCP tool and `--chrome-path`
+  CLI flag. General Chrome binary override — also used for auth proxy gating.
+- **`download_chrome` MCP tool** downloads Chrome 136 to `~/.autowrec/chrome/`
+  with SHA-256 verification. Windows auto-extraction via 7-Zip.
+
+### Notes
+
+- Linux: consumer Chrome 136 no longer available from Google. `download_chrome`
+  provides a Chrome for Testing fallback with anti-bot warning.
+
 ## [1.5.0] — 2026-05-13
 
 ### Added

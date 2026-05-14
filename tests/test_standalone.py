@@ -90,7 +90,7 @@ def run_tests():
 
     from autowrec import config
 
-    check("VERSION is set", config.VERSION == "1.5.0")
+    check("VERSION is set", config.VERSION == "1.5.1")
     check("SANDBOX_TIMEOUT_SECONDS default", config.SANDBOX_TIMEOUT_SECONDS == 60)
     check("AGENT_MODEL removed", not hasattr(config, "AGENT_MODEL"))
     check("RECORDER_AI_MODEL removed", not hasattr(config, "RECORDER_AI_MODEL"))

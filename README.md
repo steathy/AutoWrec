@@ -75,11 +75,11 @@ Add to your project's `.mcp.json` or global `~/.claude.json`:
 
 #### Verify the MCP Server
 
-After adding the config, restart Claude Code. You should see `autowrec` listed when you run `/mcp` in Claude Code. The AI tool now has access to 8 tools:
+After adding the config, restart Claude Code. You should see `autowrec` listed when you run `/mcp` in Claude Code. The AI tool now has access to 9 tools:
 
 | Tool | Purpose | Key parameters |
 |------|---------|----------------|
-| `record_session` | Launch browser and start recording (non-blocking) | `url`, `proxy` |
+| `record_session` | Launch browser and start recording (non-blocking) | `url`, `proxy`, `chrome_path` |
 | `check_recording` | Poll whether the recording is still running or finished | — |
 | `read_session_summary` | Lean session digest by default | `verbose=true` for full SUMMARY.json |
 | `read_timeline` | Paginated time-sorted user actions + network requests | `offset`, `limit`, `summary=false` for full events |
@@ -87,6 +87,7 @@ After adding the config, restart Claude Code. You should see `autowrec` listed w
 | `list_workspace_files` | Browse the workspace directory | `subdirectory`, `include_sizes=true` |
 | `read_file` | Read a workspace file | `mode=stat\|head\|raw`, `offset`, `limit` (raw only) |
 | `execute_code` | Run Python in a persistent IPython environment | `code`, `timeout` |
+| `download_chrome` | Download Chrome 136 for authenticated proxy support | — |
 
 > **v1.3 note:** `read_transaction` no longer inlines body content. To read a request payload or response body, call `read_file` on `<request_folder>/req_payload.<ext>` or `<request_folder>/res_body.<ext>` — the extension is in `request.content_detection.extension` (visible at `level=full`).
 
@@ -185,6 +186,18 @@ level (not leaked to Chrome's UI).
 SOCKS5 with username/password auth is a Chrome limitation (Chromium #256785) and
 is not supported. Use IP whitelisting or a local proxy forwarder.
 
+**Chrome < 137 required for authenticated proxies:** Chrome 137+ removed `--load-extension`
+support needed for proxy auth. AutoWrec checks the Chrome version automatically. Options:
+- If your system Chrome is < 137, it's used directly (no extra download).
+- Otherwise, use the `download_chrome` MCP tool:
+  - **Windows/macOS:** downloads consumer Chrome 136 (auto-extraction on Windows; manual on macOS).
+  - **Linux:** downloads a pinned Chrome for Testing 136 fallback (consumer build unavailable). May be weaker for anti-bot evasion.
+- Or pass the path to any Chrome < 137 via `--chrome-path` CLI flag or MCP `chrome_path`.
+
+**Linux note:** Consumer Chrome 136 is no longer available for download from Google.
+The `download_chrome` tool provides a Chrome for Testing 136 fallback for Linux, which
+may be more detectable by anti-bot systems than consumer Chrome.
+
 **Priority:** `--proxy` CLI flag or MCP `record_session(proxy=...)` parameter >
 `AUTOWREC_PROXY` env var > `[proxy] url` in config.toml.
 
@@ -203,7 +216,7 @@ python tests/test_debug_review.py   # regression suite from review passes
 
 ```
 src/autowrec/
-├── mcp_server.py          # FastMCP server (8 tools over stdio)
+├── mcp_server.py          # FastMCP server (9 tools over stdio)
 ├── config.py              # Global configuration + TOML loader
 ├── console.py             # Rich terminal output
 ├── bin_manager.py         # Downloads rg, jq, sd for execution environment
