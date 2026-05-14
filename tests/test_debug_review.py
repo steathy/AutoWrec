@@ -1066,109 +1066,88 @@ def main():
     )
 
     # ─────────────────────────────────────────────────────────────────────
-    section("18. Proxy auth handler (CDP Fetch)")
+    section("18. Proxy auth via Chrome extension (post-CDP-Fetch removal)")
     # ─────────────────────────────────────────────────────────────────────
     from autowrec.recorder.browser_agent import BrowserAgent
 
-    # Verify _proxy_creds parsing (percent-decoded)
     ba = BrowserAgent(proxy_url="http://alice:p%40ss@proxy.test:3128")
-    check(
-        "proxy creds: username parsed",
-        ba._proxy_creds is not None and ba._proxy_creds[0] == "alice",
-    )
-    check(
-        "proxy creds: password percent-decoded",
-        ba._proxy_creds is not None and ba._proxy_creds[1] == "p@ss",
-    )
+    check("proxy creds: username parsed", ba._proxy_creds is not None and ba._proxy_creds[0] == "alice")
+    check("proxy creds: password percent-decoded", ba._proxy_creds is not None and ba._proxy_creds[1] == "p@ss")
 
-    # Verify clean proxy URL strips credentials
     from urllib.parse import urlparse, urlunparse
     parsed = urlparse("http://alice:secret@proxy.test:3128")
     clean = urlunparse((parsed.scheme, BrowserAgent._proxy_netloc(parsed), "", "", "", ""))
-    check(
-        "clean proxy URL strips user:pass",
-        "alice" not in clean and "secret" not in clean,
-        f"got {clean}",
-    )
-    check(
-        "clean proxy URL keeps host:port",
-        "proxy.test:3128" in clean,
-        f"got {clean}",
-    )
+    check("clean proxy URL strips user:pass", "alice" not in clean and "secret" not in clean, f"got {clean}")
 
-    # Verify no creds for socks5 (unauthenticated)
-    ba_s5 = BrowserAgent(proxy_url="socks5://proxy.test:1080")
-    check("socks5: no _proxy_creds", ba_s5._proxy_creds is None)
-
-    # Verify socks5+auth credentials are ignored (B3)
     ba_s5a = BrowserAgent(proxy_url="socks5://user:pass@proxy.test:1080")
-    check("socks5+auth: creds ignored, no Fetch overhead", ba_s5a._proxy_creds is None)
+    check("socks5+auth: creds ignored", ba_s5a._proxy_creds is None)
 
-    # Verify Fetch.enable uses patterns=[] and is guarded by _proxy_creds
+    # Extension generator
+    ba_ext = BrowserAgent(proxy_url="http://user:pass@proxy.test:3128")
+    ext_dir = ba_ext._create_proxy_auth_extension()
+    check("extension dir created", ext_dir is not None and os.path.isdir(ext_dir))
+    if ext_dir:
+        import json as _json
+        manifest_path = os.path.join(ext_dir, "manifest.json")
+        bg_path = os.path.join(ext_dir, "background.js")
+        check("manifest.json exists", os.path.isfile(manifest_path))
+        check("background.js exists", os.path.isfile(bg_path))
+
+        with open(manifest_path) as f:
+            manifest = _json.load(f)
+        check("manifest version is 3", manifest.get("manifest_version") == 3)
+        check("manifest has webRequestAuthProvider", "webRequestAuthProvider" in manifest.get("permissions", []))
+        check("manifest has NO proxy permission (auth-only)", "proxy" not in manifest.get("permissions", []))
+
+        with open(bg_path) as f:
+            bg_content = f.read()
+        check("background.js has proxy host", "proxy.test" in bg_content)
+        check("background.js has port", "3128" in bg_content)
+        check("background.js has onAuthRequired", "onAuthRequired" in bg_content)
+        check("background.js has isProxy guard", "details.isProxy" in bg_content)
+        check("background.js has challenger check", "details.challenger" in bg_content)
+        check("background.js has retry guard", "tried" in bg_content and "cancel" in bg_content)
+        check("background.js credentials via JSON", "CREDS" in bg_content)
+        check("background.js has NO chrome.proxy.settings", "chrome.proxy.settings" not in bg_content)
+
+        shutil.rmtree(ext_dir, ignore_errors=True)
+
+    ba_noauth = BrowserAgent(proxy_url="http://proxy.test:3128")
+    check("no extension for unauthenticated proxy", ba_noauth._create_proxy_auth_extension() is None)
+
+    # Verify CDP Fetch code is gone and new methods exist
     import autowrec.recorder.browser_agent as ba_mod
     ba_src = inspect.getsource(ba_mod)
-    check(
-        "Fetch.enable guarded by _proxy_creds check",
-        "if self._proxy_creds:" in ba_src and "cdp.fetch.enable" in ba_src,
-    )
-    check(
-        "Fetch.enable passes patterns=[] (R3-B5)",
-        "patterns=[]" in ba_src,
-    )
-    check(
-        "auth handler filters by source=='Proxy' (R3-B6)",
-        '"Proxy"' in ba_src and "auth_challenge" in ba_src and "source" in ba_src,
-    )
+    check("CDP Fetch.enable removed", "cdp.fetch.enable" not in ba_src)
+    check("_handle_proxy_auth removed", "_handle_proxy_auth" not in ba_src)
+    check("_proxy_auth_failed removed", "_proxy_auth_failed" not in ba_src)
+    check("extension generator exists", "_create_proxy_auth_extension" in ba_src)
+    check("version checker exists", "_get_chrome_version" in ba_src)
+    check("system Chrome finder exists", "_find_system_chrome" in ba_src)
 
-    # Behavioral test: auth handler routes by challenge source (R4-G11, R5-B12)
-    from dataclasses import dataclass
-    from typing import Any
-    from zendriver.cdp.fetch import RequestId
+    # Verify auth proxy drops incognito
+    check("auth proxy drops incognito", "not self._proxy_creds" in ba_src)
+    check("auth proxy uses --proxy-server", '"--proxy-server=' in ba_src)
+    check("auth proxy uses --load-extension", '"--load-extension=' in ba_src)
 
-    @dataclass
-    class FakeAuthChallenge:
-        origin: str = "proxy.test"
-        scheme: str = "basic"
-        realm: str = "proxy"
-        source: str | None = None
+    # Version checker
+    if sys.platform == "win32":
+        system_chrome = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        if os.path.exists(system_chrome):
+            ver = BrowserAgent._get_chrome_version(system_chrome)
+            check("version checker reads system Chrome", ver is not None and ver > 100, f"got {ver}")
 
-    @dataclass
-    class FakeAuthEvent:
-        request_id: RequestId = RequestId("req_1")
-        auth_challenge: Any = None
-        request: Any = None
-        frame_id: str = ""
-        resource_type: str = "Document"
+    ba_cp = BrowserAgent(proxy_url="http://u:p@proxy:8080", chrome_path="/fake/chrome")
+    check("chrome_path stored", ba_cp.chrome_path == "/fake/chrome")
 
-    class FakeSender:
-        def __init__(self):
-            self.calls = []
-        async def send(self, cmd):
-            self.calls.append(next(cmd))
-
-    ba_auth_test = BrowserAgent(proxy_url="http://alice:secret@proxy.test:3128")
-
-    # Server auth (401) should get "Default", not proxy creds
-    sender = FakeSender()
-    server_event = FakeAuthEvent(request_id=RequestId("srv_1"), auth_challenge=FakeAuthChallenge(source="Server"))
-    asyncio.run(ba_auth_test._handle_proxy_auth_for(sender, server_event))
-    server_resp = sender.calls[0]["params"]["authChallengeResponse"]
-    check("server auth gets Default response", server_resp == {"response": "Default"})
-
-    # Proxy auth (407) should get ProvideCredentials with creds
-    sender2 = FakeSender()
-    proxy_event = FakeAuthEvent(request_id=RequestId("prx_1"), auth_challenge=FakeAuthChallenge(source="Proxy"))
-    asyncio.run(ba_auth_test._handle_proxy_auth_for(sender2, proxy_event))
-    proxy_resp = sender2.calls[0]["params"]["authChallengeResponse"]
-    check("proxy auth gets ProvideCredentials", proxy_resp["response"] == "ProvideCredentials")
-    check("proxy auth sends username", proxy_resp.get("username") == "alice")
-    check("proxy auth sends password", proxy_resp.get("password") == "secret")
-
-    # Same request_id again should get CancelAuth (retry guard)
-    sender3 = FakeSender()
-    asyncio.run(ba_auth_test._handle_proxy_auth_for(sender3, proxy_event))
-    retry_resp = sender3.calls[0]["params"]["authChallengeResponse"]
-    check("proxy auth retry gets CancelAuth", retry_resp == {"response": "CancelAuth"})
+    # Default port normalization
+    ba_noport = BrowserAgent(proxy_url="http://user:pass@proxy.test")
+    ext_noport = ba_noport._create_proxy_auth_extension()
+    if ext_noport:
+        with open(os.path.join(ext_noport, "background.js")) as f:
+            noport_bg = f.read()
+        check("default port 80 for http", '"port": 80' in noport_bg or '"port":80' in noport_bg)
+        shutil.rmtree(ext_noport, ignore_errors=True)
 
     # ─────────────────────────────────────────────────────────────────────
     print()

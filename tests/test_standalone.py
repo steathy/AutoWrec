@@ -108,7 +108,8 @@ def run_tests():
     async def test_tools():
         tools = await mcp.list_tools()
         tool_names = {t.name for t in tools}
-        check("8 tools registered", len(tools) == 8, f"got {len(tools)}")
+        check("9 tools registered", len(tools) == 9, f"got {len(tools)}")
+        check("download_chrome tool", "download_chrome" in tool_names)
         check("record_session tool", "record_session" in tool_names)
         check("check_recording tool", "check_recording" in tool_names)
         check("read_session_summary tool", "read_session_summary" in tool_names)
@@ -644,39 +645,50 @@ def run_tests():
     check("IPv6 proxy accepted", ba_ipv6.proxy_url == "http://[::1]:8080")
     check("IPv6 netloc re-brackets", BrowserAgent._proxy_netloc(urlparse("http://[::1]:8080")) == "[::1]:8080")
 
-    # MCP record_session has proxy param (R3-G6)
-    async def check_proxy_param():
+    # MCP record_session has proxy + chrome_path params
+    async def check_proxy_params():
         tools = await mcp.list_tools()
         rs_tool = next(t for t in tools if t.name == "record_session")
         schema = rs_tool.inputSchema if hasattr(rs_tool, 'inputSchema') else rs_tool.parameters
         props = schema.get("properties", {})
         check("MCP record_session has proxy param", "proxy" in props)
-    asyncio.run(check_proxy_param())
+        check("MCP record_session has chrome_path param", "chrome_path" in props)
+    asyncio.run(check_proxy_params())
 
-    # MCP proxy override scoped and restored (R4-G10, R5-B11)
-    seen_proxy = {}
-    def fake_run_recording(url="about:blank"):
-        seen_proxy["value"] = cfg.PROXY_URL
+    # MCP proxy + chrome_path scoping (save/restore)
+    seen_state = {}
+    def fake_run_recording_scope(url="about:blank"):
+        seen_state["proxy"] = cfg.PROXY_URL
+        seen_state["chrome"] = cfg.CHROME_PATH
         return False
 
-    saved_proxy_g10 = cfg.PROXY_URL
+    saved_proxy_scope = cfg.PROXY_URL
+    saved_chrome_scope = cfg.CHROME_PATH
     try:
-        cfg.PROXY_URL = "http://default-proxy:8080"
+        cfg.PROXY_URL = "http://default:8080"
+        cfg.CHROME_PATH = None
         from unittest.mock import patch
-        with patch("autowrec.recorder.run_recording", side_effect=fake_run_recording):
-            from autowrec.mcp_server import _build_server as _bs2
-            mcp2, state2, _ = _bs2()
+        with patch("autowrec.recorder.run_recording", side_effect=fake_run_recording_scope):
+            from autowrec.mcp_server import _build_server as _bs_scope
+            mcp_scope, st_scope, _ = _bs_scope()
 
-            async def test_proxy_scoping():
-                await mcp2.call_tool("record_session", {"url": "about:blank", "proxy": "http://scoped-proxy:8080"})
-                thread = state2.get("recording_thread")
+            async def test_scope():
+                await mcp_scope.call_tool("record_session", {
+                    "url": "about:blank",
+                    "proxy": "http://scoped:9090",
+                    "chrome_path": "/fake/chrome136",
+                })
+                thread = st_scope.get("recording_thread")
                 if thread:
                     thread.join(timeout=5)
-            asyncio.run(test_proxy_scoping())
-        check("MCP proxy seen by background recording", seen_proxy.get("value") == "http://scoped-proxy:8080")
-        check("MCP proxy restored after recording", cfg.PROXY_URL == "http://default-proxy:8080")
+            asyncio.run(test_scope())
+        check("MCP proxy seen by recorder", seen_state.get("proxy") == "http://scoped:9090")
+        check("MCP chrome_path seen by recorder", seen_state.get("chrome") == "/fake/chrome136")
+        check("MCP proxy restored after recording", cfg.PROXY_URL == "http://default:8080")
+        check("MCP chrome_path restored after recording", cfg.CHROME_PATH is None)
     finally:
-        cfg.PROXY_URL = saved_proxy_g10
+        cfg.PROXY_URL = saved_proxy_scope
+        cfg.CHROME_PATH = saved_chrome_scope
 
     # ─────────────────────────────────────────────────────────────────────────
     section("RESULTS")
