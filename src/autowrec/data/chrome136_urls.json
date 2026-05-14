@@ -1,0 +1,41 @@
+{
+  "_comment": "Chrome 136 consumer builds with pinned SHA-256. Used by download_chrome MCP tool.",
+  "_source": "https://github.com/ulixee/chrome-versions",
+  "_note": "Linux consumer builds no longer available from Google. Linux entries use Chrome for Testing (may trigger anti-bot detection).",
+  "win64": {
+    "version": "136.0.7103.114",
+    "url": "https://dl.google.com/release2/chrome/ii74n6hkryhvtp67bbscqhvh2i_136.0.7103.114/136.0.7103.114_chrome_installer.exe",
+    "sha256": "a517f5ecb72f347bf36f415408de8616639ac005bde655b7f4ea200e7a694006",
+    "format": "exe_7z"
+  },
+  "win32": {
+    "version": "136.0.7103.114",
+    "url": "https://dl.google.com/release2/chrome/adyugir77j6puiowb5ktoemfhpeq_136.0.7103.114/136.0.7103.114_chrome_installer.exe",
+    "sha256": "bb59a94aaed6b43665e83c49a067487d56fec49cd574f96dcc7e3d1e9334db9e",
+    "format": "exe_7z"
+  },
+  "mac": {
+    "version": "136.0.7103.114",
+    "url": "https://dl.google.com/release2/chrome/iwktnyywqpn7dye3zjzgosvevq_136.0.7103.114/GoogleChrome-136.0.7103.114.dmg",
+    "sha256": "9b225ac2581505094bb6005f49f08be577dd9c7f1def177e8fc255dbed8c67fb",
+    "format": "dmg",
+    "extract_instructions": "hdiutil attach GoogleChrome-136.0.7103.114.dmg && cp -R '/Volumes/Google Chrome/Google Chrome.app' ~/.autowrec/chrome-136/ && hdiutil detach '/Volumes/Google Chrome'",
+    "chrome_path": "~/.autowrec/chrome-136/Google Chrome.app/Contents/MacOS/Google Chrome"
+  },
+  "mac_arm64": {
+    "version": "136.0.7103.114",
+    "url": "https://dl.google.com/release2/chrome/iwktnyywqpn7dye3zjzgosvevq_136.0.7103.114/GoogleChrome-136.0.7103.114.dmg",
+    "sha256": "9b225ac2581505094bb6005f49f08be577dd9c7f1def177e8fc255dbed8c67fb",
+    "format": "dmg",
+    "extract_instructions": "hdiutil attach GoogleChrome-136.0.7103.114.dmg && cp -R '/Volumes/Google Chrome/Google Chrome.app' ~/.autowrec/chrome-136/ && hdiutil detach '/Volumes/Google Chrome'",
+    "chrome_path": "~/.autowrec/chrome-136/Google Chrome.app/Contents/MacOS/Google Chrome"
+  },
+  "linux": {
+    "version": "136.0.7103.113",
+    "url": "https://storage.googleapis.com/chrome-for-testing-public/136.0.7103.113/linux64/chrome-linux64.zip",
+    "sha256": "a9ec3b5f654745360095f4e066b6b78442e56fe4124831051449813e5c4e0f95",
+    "format": "zip",
+    "warning": "Chrome for Testing build — consumer Linux build no longer available from Google. May trigger anti-bot detection.",
+    "chrome_path": "~/.autowrec/chrome/chrome-linux64/chrome"
+  }
+}

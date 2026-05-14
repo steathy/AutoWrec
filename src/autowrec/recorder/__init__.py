@@ -80,7 +80,7 @@ def run_recording(url: str = "about:blank") -> str | bool:
 
     blocklist = _init_blocklist()
 
-    _browser_agent = BrowserAgent(blocklist=blocklist, proxy_url=config.PROXY_URL)
+    _browser_agent = BrowserAgent(blocklist=blocklist, proxy_url=config.PROXY_URL, chrome_path=config.CHROME_PATH)
 
     rule("STARTING RECORDER", style="bold cyan")
     info(f"Target URL : {url}")
@@ -104,6 +104,8 @@ def run_recording(url: str = "about:blank") -> str | bool:
 
     try:
         session_data = asyncio.run(_browser_agent.run_session(url=url))
+    except ValueError:
+        raise
     except Exception as exc:
         error(f"Recording session failed: {exc}")
         log_exception()

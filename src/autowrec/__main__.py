@@ -81,6 +81,8 @@ def _apply_config_overrides(args):
         config.VERBOSE = True
     if getattr(args, "proxy", None):
         config.PROXY_URL = args.proxy
+    if getattr(args, "chrome_path", None):
+        config.CHROME_PATH = args.chrome_path
 
 
 def cmd_record(args):
@@ -163,6 +165,7 @@ def _print_rich_help():
     t4.add_row("--redact", "Redact passwords, auth headers, and cookies")
     t4.add_row("--verbose", "Show detailed diagnostic output")
     t4.add_row("--proxy URL", "Proxy for browser traffic (http, socks4, socks5)")
+    t4.add_row("--chrome-path PATH", "Chrome binary (< v137 for authenticated proxy)")
     t4.add_row("-V, --version", "Show version")
     t4.add_row("-h, --help", "Show this help message")
     console.print(t4)
@@ -223,6 +226,7 @@ def main():
         p.add_argument("--redact", action="store_true", default=False)
         p.add_argument("--verbose", action="store_true", default=False)
         p.add_argument("--proxy", metavar="URL", help="Proxy URL (http://, socks4://, socks5://)")
+        p.add_argument("--chrome-path", metavar="PATH", help="Chrome binary (< v137 for authenticated proxy)")
         p.add_argument("-h", "--help", action="store_true", default=False, dest="help_flag")
         p.add_argument("-V", "--version", action="store_true", default=False)
 

@@ -114,6 +114,7 @@ def _build_server():
     def record_session(
         url: Annotated[str, "The starting URL to navigate to"] = "about:blank",
         proxy: Annotated[str | None, "Proxy URL (http://, socks4://, socks5://). Auth: 'http://user:pass@host:port'"] = None,
+        chrome_path: Annotated[str | None, "Path to Chrome binary (< v137 needed for authenticated proxy)"] = None,
     ) -> str:
         """Launch Chrome with CDP capture and return immediately. Poll
         check_recording until the user closes the browser, then explore
@@ -125,9 +126,43 @@ def _build_server():
 
         config.ensure_output_dirs()
 
+        # Resolve zip chrome_path before mutating globals
+        resolved_chrome_path = chrome_path
+        _zip_extract_dir = None
+        if chrome_path and chrome_path.lower().endswith(".zip") and os.path.isfile(chrome_path):
+            import zipfile
+            import tempfile
+            import shutil as _shutil
+            _zip_extract_dir = tempfile.mkdtemp(prefix="autowrec_chrome_zip_")
+            try:
+                with zipfile.ZipFile(chrome_path, "r") as z:
+                    for member in z.namelist():
+                        resolved = os.path.realpath(os.path.join(_zip_extract_dir, member))
+                        if not resolved.startswith(os.path.realpath(_zip_extract_dir) + os.sep):
+                            _shutil.rmtree(_zip_extract_dir, ignore_errors=True)
+                            return f"Zip contains path traversal: {member}"
+                    z.extractall(_zip_extract_dir)
+                for root, dirs, files in os.walk(_zip_extract_dir):
+                    for f in files:
+                        if f.lower() == "chrome.exe" or (f == "chrome" and os.access(os.path.join(root, f), os.X_OK)):
+                            resolved_chrome_path = os.path.join(root, f)
+                            break
+                    if resolved_chrome_path != chrome_path:
+                        break
+                if resolved_chrome_path == chrome_path:
+                    _shutil.rmtree(_zip_extract_dir, ignore_errors=True)
+                    return "Zip extracted but no Chrome binary found inside."
+            except Exception as exc:
+                if _zip_extract_dir:
+                    _shutil.rmtree(_zip_extract_dir, ignore_errors=True)
+                return f"Failed to extract Chrome zip: {exc}"
+
         saved_proxy = config.PROXY_URL
+        saved_chrome_path = config.CHROME_PATH
         if proxy:
             config.PROXY_URL = proxy
+        if resolved_chrome_path:
+            config.CHROME_PATH = resolved_chrome_path
 
         _state["recording_error"] = None
         _state["workspace"] = None
@@ -143,6 +178,10 @@ def _build_server():
                 _state["recording_error"] = str(exc)
             finally:
                 config.PROXY_URL = saved_proxy
+                config.CHROME_PATH = saved_chrome_path
+                if _zip_extract_dir and os.path.isdir(_zip_extract_dir):
+                    import shutil
+                    shutil.rmtree(_zip_extract_dir, ignore_errors=True)
 
         thread = threading.Thread(target=_run_in_background, daemon=True)
         thread.start()
@@ -444,6 +483,193 @@ def _build_server():
         if timeout is not None:
             kwargs["custom_timeout"] = max(1, timeout)
         return sandbox.execute(code, **kwargs)
+
+    def _find_chrome_binary(search_dir: str) -> str | None:
+        for root, dirs, files in os.walk(search_dir):
+            for f in files:
+                if f.lower() == "chrome.exe":
+                    return os.path.join(root, f)
+                if f == "chrome" and os.access(os.path.join(root, f), os.X_OK):
+                    return os.path.join(root, f)
+        return None
+
+    def _find_7z() -> str | None:
+        import shutil as _shutil
+        for candidate in [
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+        ]:
+            if os.path.isfile(candidate):
+                return candidate
+        return _shutil.which("7z") or _shutil.which("7za")
+
+    @mcp.tool()
+    def download_chrome() -> str:
+        """Download Chrome 136 for authenticated proxy support.
+        WARNING: ~120MB download + extraction, may be slow. Saves to ~/.autowrec/chrome/."""
+        import json as _json
+        import re
+        import subprocess
+        import sys as _sys
+        import urllib.request
+
+        dest = str(config.HOME_DIR / "chrome")
+        os.makedirs(dest, exist_ok=True)
+
+        if _sys.platform == "win32":
+            import struct
+            platform_key = "win64" if struct.calcsize("P") * 8 == 64 else "win32"
+        elif _sys.platform == "darwin":
+            import platform as _plat
+            platform_key = "mac_arm64" if _plat.machine() == "arm64" else "mac"
+        else:
+            platform_key = "linux"
+
+        chrome_exe = _find_chrome_binary(dest)
+        if chrome_exe:
+            from .recorder.browser_agent import BrowserAgent
+            ver = BrowserAgent._get_chrome_version(chrome_exe)
+            if ver is not None and ver < 137:
+                msg = f"Chrome {ver} already available at: {chrome_exe}\nPass this as chrome_path to record_session."
+                urls_path = os.path.join(os.path.dirname(__file__), "data", "chrome136_urls.json")
+                try:
+                    with open(urls_path) as f:
+                        _meta = _json.load(f)
+                    _warn = _meta.get(platform_key, {}).get("warning")
+                    if _warn:
+                        msg += f"\nWARNING: {_warn}"
+                except Exception:
+                    pass
+                return msg
+            else:
+                import shutil as _shutil
+                _shutil.rmtree(dest, ignore_errors=True)
+                os.makedirs(dest, exist_ok=True)
+
+        urls_path = os.path.join(os.path.dirname(__file__), "data", "chrome136_urls.json")
+        try:
+            with open(urls_path) as f:
+                urls_data = _json.load(f)
+            entry = urls_data.get(platform_key, {})
+            url = entry.get("url")
+            version = entry.get("version")
+            expected_sha256 = entry.get("sha256")
+            warning = entry.get("warning")
+            extract_instructions = entry.get("extract_instructions")
+            chrome_path_hint = entry.get("chrome_path")
+        except Exception:
+            url = version = expected_sha256 = warning = extract_instructions = chrome_path_hint = None
+
+        if not url:
+            return (f"No Chrome 136 download URL found for platform '{platform_key}'.\n"
+                    "Provide a Chrome < 137 binary path via chrome_path instead.")
+
+        if not expected_sha256 or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256):
+            msg = (f"Auto-download not available for '{platform_key}' (no pinned SHA-256).\n"
+                   f"Download Chrome {version} manually from:\n  {url}\n")
+            if warning:
+                msg += f"WARNING: {warning}\n"
+            if extract_instructions:
+                msg += f"Extract with:\n  {extract_instructions}\n"
+            if chrome_path_hint:
+                msg += f"Then pass as chrome_path:\n  {chrome_path_hint}\n"
+            else:
+                msg += "Extract and pass the chrome binary path as chrome_path to record_session.\n"
+            return msg
+
+        filename = url.rsplit("/", 1)[-1]
+        installer_path = os.path.join(dest, filename)
+
+        if not os.path.exists(installer_path):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "AutoWrec"})
+                with urllib.request.urlopen(req, timeout=600) as resp:
+                    with open(installer_path, "wb") as f:
+                        while True:
+                            chunk = resp.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+            except Exception as exc:
+                return f"Download failed: {exc}\nDownload manually from: {url}"
+
+        import hashlib
+        sha = hashlib.sha256()
+        with open(installer_path, "rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                sha.update(chunk)
+        actual = sha.hexdigest()
+        if actual.lower() != expected_sha256.lower():
+            os.remove(installer_path)
+            return (f"SHA-256 mismatch! Expected {expected_sha256[:16]}..., got {actual[:16]}...\n"
+                    f"Download may be corrupted. Re-run download_chrome or download manually.")
+
+        if _sys.platform == "win32":
+            seven_z = _find_7z()
+            if not seven_z:
+                return (f"Downloaded to {installer_path}, but 7-Zip is needed to extract.\n"
+                        "Install 7-Zip from https://www.7-zip.org/ then re-run download_chrome.")
+            try:
+                stage1 = os.path.join(dest, "_extract_stage1")
+                os.makedirs(stage1, exist_ok=True)
+                subprocess.run([seven_z, "x", installer_path, f"-o{stage1}", "-y"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=60, check=True)
+                chrome_7z = os.path.join(stage1, "chrome.7z")
+                if os.path.exists(chrome_7z):
+                    subprocess.run([seven_z, "x", chrome_7z, f"-o{stage1}", "-y"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=120, check=True)
+                chrome_bin = os.path.join(stage1, "Chrome-bin")
+                final_dir = os.path.join(dest, "Chrome-bin")
+                if os.path.isdir(chrome_bin):
+                    if os.path.exists(final_dir):
+                        import shutil
+                        shutil.rmtree(final_dir)
+                    os.rename(chrome_bin, final_dir)
+                for root, dirs, files in os.walk(final_dir):
+                    for f in files:
+                        if f.lower() == "os_update_handler.exe":
+                            handler_path = os.path.join(root, f)
+                            os.rename(handler_path, handler_path + ".disabled")
+                import shutil
+                shutil.rmtree(stage1, ignore_errors=True)
+                try:
+                    os.remove(installer_path)
+                except OSError:
+                    pass
+            except subprocess.CalledProcessError as exc:
+                return f"Extraction failed: {exc}\nExtract {installer_path} manually with 7-Zip."
+            except Exception as exc:
+                return f"Extraction error: {exc}"
+        else:
+            msg = f"Downloaded to {installer_path}.\n"
+            if warning:
+                msg += f"WARNING: {warning}\n"
+            if extract_instructions:
+                msg += f"Extract with:\n  {extract_instructions}\n"
+            else:
+                msg += "Auto-extraction is only supported on Windows. Extract manually.\n"
+            if chrome_path_hint:
+                msg += f"Then pass as chrome_path:\n  {chrome_path_hint}"
+            else:
+                msg += "Pass the chrome binary path as chrome_path to record_session."
+            return msg
+
+        chrome_exe = _find_chrome_binary(dest)
+        if chrome_exe:
+            from .recorder.browser_agent import BrowserAgent
+            ver = BrowserAgent._get_chrome_version(chrome_exe)
+            if ver is None:
+                return f"Extracted to {dest} but could not read Chrome version. Verify manually."
+            if ver >= 137:
+                return f"Extracted Chrome {ver} but need < 137. The download URL may be wrong."
+            return (f"Chrome {ver} ready at: {chrome_exe}\n"
+                    f"Pass this as chrome_path to record_session.")
+        return f"Extracted to {dest}, but could not locate chrome.exe."
 
     # Expose the sandbox factory via _state so external callers (notably the
     # warmup thread in run_mcp_server) can trigger creation without changing

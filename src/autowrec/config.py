@@ -59,6 +59,7 @@ VERBOSE = False
 # Format: http://host:port, http://user:pass@host:port, socks4://host:port, socks5://host:port
 # Priority: --proxy CLI flag > AUTOWREC_PROXY env var > [proxy] config.toml
 PROXY_URL: str | None = os.environ.get("AUTOWREC_PROXY")
+CHROME_PATH: str | None = None
 
 
 # ── Default config.toml content ─────────────────────────────────────────────

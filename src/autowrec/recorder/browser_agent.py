@@ -46,13 +46,14 @@ class TimestampConverter:
 class BrowserAgent:
     """Manages the headless/UI browser session, CDP event handlers, and data collection."""
 
-    def __init__(self, telemetry_js_path=None, blocklist: BlocklistDB | None = None, proxy_url: str | None = None):
+    def __init__(self, telemetry_js_path=None, blocklist: BlocklistDB | None = None, proxy_url: str | None = None, chrome_path: str | None = None):
         _js_dir = os.path.join(os.path.dirname(__file__), "js")
         self.telemetry_js_path = telemetry_js_path or os.path.join(_js_dir, "telemetry.js")
         self.blocklist = blocklist
         self.proxy_url = proxy_url
         self._proxy_creds: tuple[str, str] | None = None
-        self._proxy_auth_failed: set[str] = set()
+        self._proxy_ext_dir = None
+        self.chrome_path = chrome_path
         if proxy_url:
             from urllib.parse import urlparse, unquote
             parsed = urlparse(proxy_url)
@@ -72,7 +73,7 @@ class BrowserAgent:
                 if parsed.scheme.lower().startswith("http"):
                     self._proxy_creds = (unquote(parsed.username), unquote(parsed.password or ""))
                 else:
-                    warn(f"Proxy credentials ignored — {parsed.scheme} does not support CDP-based auth. Use IP whitelisting.")
+                    warn(f"Proxy credentials ignored — {parsed.scheme} does not support extension-based auth. Use IP whitelisting.")
         self.recording_active = False
         self.browser = None
         self.tab = None
@@ -430,32 +431,111 @@ class BrowserAgent:
             self.orphan_extra_info[event.request_id]["received"] = cookie_data
             self.orphan_extra_info[event.request_id]["raw_headers"] = headers
 
-    async def _handle_proxy_auth(self, event: cdp.fetch.AuthRequired):
-        await self._handle_proxy_auth_for(self.tab, event)
+    @staticmethod
+    def _get_chrome_version(chrome_path: str) -> int | None:
+        """Return the major version of a Chrome binary, or None if unreadable."""
+        import subprocess
+        import sys
+        from pathlib import Path
+        path = Path(chrome_path) if not isinstance(chrome_path, Path) else chrome_path
+        if not path.exists():
+            return None
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                size = ctypes.windll.version.GetFileVersionInfoSizeW(str(path), None)
+                if size:
+                    data = ctypes.create_string_buffer(size)
+                    ctypes.windll.version.GetFileVersionInfoW(str(path), 0, size, data)
+                    buf = ctypes.c_wchar_p()
+                    buf_len = ctypes.c_uint()
+                    ctypes.windll.version.VerQueryValueW(data, r"\StringFileInfo\040904B0\ProductVersion", ctypes.byref(buf), ctypes.byref(buf_len))
+                    if buf.value:
+                        return int(buf.value.split(".")[0])
+            out = subprocess.check_output([str(path), "--version"], text=True, timeout=5, stderr=subprocess.DEVNULL).strip()
+            for part in out.split():
+                if "." in part:
+                    return int(part.split(".")[0])
+        except Exception:
+            pass
+        return None
 
-    async def _handle_proxy_auth_for(self, sender, event: cdp.fetch.AuthRequired):
-        if getattr(event.auth_challenge, "source", None) != "Proxy":
-            await sender.send(cdp.fetch.continue_with_auth(
-                request_id=event.request_id,
-                auth_challenge_response=cdp.fetch.AuthChallengeResponse(response="Default"),
-            ))
-            return
-        if not self._proxy_creds or event.request_id in self._proxy_auth_failed:
-            await sender.send(cdp.fetch.continue_with_auth(
-                request_id=event.request_id,
-                auth_challenge_response=cdp.fetch.AuthChallengeResponse(response="CancelAuth"),
-            ))
-            return
-        self._proxy_auth_failed.add(event.request_id)
+    @staticmethod
+    def _find_system_chrome() -> str | None:
+        """Find the system Google Chrome binary."""
+        import sys
+        if sys.platform == "win32":
+            for p in [
+                os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+            ]:
+                if os.path.isfile(p):
+                    return p
+        elif sys.platform == "darwin":
+            p = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            if os.path.isfile(p):
+                return p
+        else:
+            import shutil
+            return shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+        return None
+
+    def _create_proxy_auth_extension(self) -> str | None:
+        """Generate a temp Chrome extension for authenticated proxy auth only.
+
+        Proxy routing is handled by --proxy-server flag. This extension only
+        responds to chrome.webRequest.onAuthRequired for proxy challenges.
+        Returns the extension directory path, or None if no auth needed.
+        """
+        if not self._proxy_creds:
+            return None
+
+        import json
+        import tempfile
+        from urllib.parse import urlparse
+
+        parsed = urlparse(self.proxy_url)
         username, password = self._proxy_creds
-        await sender.send(cdp.fetch.continue_with_auth(
-            request_id=event.request_id,
-            auth_challenge_response=cdp.fetch.AuthChallengeResponse(
-                response="ProvideCredentials",
-                username=username,
-                password=password,
-            ),
-        ))
+        proxy_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        manifest = {
+            "version": "1.0.0",
+            "manifest_version": 3,
+            "name": "AutoWrec Proxy Auth",
+            "permissions": ["webRequest", "webRequestAuthProvider"],
+            "host_permissions": ["<all_urls>"],
+            "background": {"service_worker": "background.js"},
+            "minimum_chrome_version": "108",
+        }
+
+        proxy_cfg = json.dumps({"host": parsed.hostname, "port": proxy_port})
+        creds_cfg = json.dumps({"username": username, "password": password})
+
+        background_js = f"""
+const PROXY = {proxy_cfg};
+const CREDS = {creds_cfg};
+const tried = new Set();
+
+chrome.webRequest.onAuthRequired.addListener(
+    function(details) {{
+        if (!details.isProxy) return {{}};
+        if (details.challenger && (details.challenger.host !== PROXY.host || details.challenger.port !== PROXY.port)) return {{}};
+        if (tried.has(details.requestId)) return {{ cancel: true }};
+        tried.add(details.requestId);
+        return {{ authCredentials: CREDS }};
+    }},
+    {{urls: ["<all_urls>"]}},
+    ["blocking"]
+);
+"""
+
+        ext_dir = tempfile.mkdtemp(prefix="autowrec_proxy_ext_")
+        with open(os.path.join(ext_dir, "manifest.json"), "w") as f:
+            json.dump(manifest, f, indent=2)
+        with open(os.path.join(ext_dir, "background.js"), "w") as f:
+            f.write(background_js)
+        return ext_dir
 
     async def target_created_handler(self, event: cdp.target.AttachedToTarget):
         target_info = event.target_info
@@ -521,14 +601,6 @@ class BrowserAgent:
                 tab_session.add_handler(cdp.network.RequestWillBeSentExtraInfo, self.req_extra_info)
                 tab_session.add_handler(cdp.network.ResponseReceivedExtraInfo, self.res_extra_info)
 
-                if self._proxy_creds:
-                    await tab_session.send(cdp.fetch.enable(patterns=[], handle_auth_requests=True))
-                    def _make_auth_handler(ts):
-                        async def handler(event: cdp.fetch.AuthRequired):
-                            await self._handle_proxy_auth_for(ts, event)
-                        return handler
-                    tab_session.add_handler(cdp.fetch.AuthRequired, _make_auth_handler(tab_session))
-
                 # Inject the JS scripts so actions in the new tab are also recorded
                 await tab_session.send(
                     cdp.page.add_script_to_evaluate_on_new_document(source=self.telemetry_script, run_immediately=True)
@@ -548,14 +620,53 @@ class BrowserAgent:
         if not self._load_scripts():
             return {}
 
+        # Auth proxy preflight — before broad try so errors propagate to MCP
+        browser_args = ["--disable-popup-blocking"]
+        if not self._proxy_creds:
+            browser_args.insert(0, "--incognito")
+        launch_chrome = self.chrome_path
+
+        if self._proxy_creds:
+            chrome_exe = self.chrome_path or self._find_system_chrome()
+            if not chrome_exe:
+                raise ValueError(
+                    "Authenticated proxy requires a Chrome binary. "
+                    "Provide one via chrome_path, or use the download_chrome MCP tool."
+                )
+            ver = self._get_chrome_version(chrome_exe)
+            if ver is None:
+                raise ValueError(
+                    f"Could not read Chrome version at {chrome_exe}. "
+                    "Verify the path is correct and the binary is executable."
+                )
+            if ver >= 137:
+                raise ValueError(
+                    f"Chrome {ver} at {chrome_exe} does not support --load-extension (need < 137). "
+                    "Provide a Chrome < 137 via chrome_path, or use download_chrome."
+                )
+            launch_chrome = chrome_exe
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(self.proxy_url)
+            clean = urlunparse((parsed.scheme, self._proxy_netloc(parsed), "", "", "", ""))
+            browser_args.append(f"--proxy-server={clean}")
+        elif self.proxy_url:
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(self.proxy_url)
+            clean = urlunparse((parsed.scheme, self._proxy_netloc(parsed), "", "", "", ""))
+            browser_args.append(f"--proxy-server={clean}")
+
         try:
-            browser_args = ["--incognito", "--disable-popup-blocking"]
-            if self.proxy_url:
-                from urllib.parse import urlparse, urlunparse
-                parsed = urlparse(self.proxy_url)
-                clean = urlunparse((parsed.scheme, self._proxy_netloc(parsed), "", "", "", ""))
-                browser_args.append(f"--proxy-server={clean}")
-            self.browser = await zd.start(headless=False, browser_args=browser_args)
+            if self._proxy_creds:
+                self._proxy_ext_dir = self._create_proxy_auth_extension()
+                if self._proxy_ext_dir:
+                    browser_args.append(f"--load-extension={self._proxy_ext_dir}")
+                    browser_args.append(f"--disable-extensions-except={self._proxy_ext_dir}")
+
+            self.browser = await zd.start(
+                headless=False,
+                browser_executable_path=launch_chrome,
+                browser_args=browser_args,
+            )
             self.recording_start = datetime.now(UTC)
             self.recording_active = True
 
@@ -578,10 +689,6 @@ class BrowserAgent:
             self.tab.add_handler(cdp.network.LoadingFailed, self.loading_failed_handler)
             self.tab.add_handler(cdp.network.RequestWillBeSentExtraInfo, self.req_extra_info)
             self.tab.add_handler(cdp.network.ResponseReceivedExtraInfo, self.res_extra_info)
-
-            if self._proxy_creds:
-                await self.tab.send(cdp.fetch.enable(patterns=[], handle_auth_requests=True))
-                self.tab.add_handler(cdp.fetch.AuthRequired, self._handle_proxy_auth)
 
             from .. import config as _cfg
             redact_js = f"window.__autowrec_redact = {'true' if _cfg.REDACT_SENSITIVE else 'false'};"
@@ -612,6 +719,12 @@ class BrowserAgent:
         except Exception as e:
             error(f"Session encountered an error: {e}")
             print_exception()
+            if self._proxy_ext_dir and not self.browser:
+                import shutil
+                shutil.rmtree(self._proxy_ext_dir, ignore_errors=True)
+                self._proxy_ext_dir = None
+            if not self.recording_start:
+                raise
 
         return await self._cleanup_and_build_report()
 
@@ -701,6 +814,11 @@ class BrowserAgent:
         except Exception as exc:
             warn(f"Failed to stop browser cleanly: {exc}")
             log_exception()
+
+        if self._proxy_ext_dir:
+            import shutil
+            shutil.rmtree(self._proxy_ext_dir, ignore_errors=True)
+            self._proxy_ext_dir = None
 
         recording_end = datetime.now(UTC)
         duration = (recording_end - self.recording_start).total_seconds() if self.recording_start else 0.0
