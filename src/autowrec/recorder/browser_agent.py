@@ -53,7 +53,7 @@ class BrowserAgent:
         self.proxy_url = proxy_url
         self._proxy_creds: tuple[str, str] | None = None
         self._proxy_ext_dir = None
-        self.chrome_path = chrome_path
+        self.chrome_path = os.path.expanduser(chrome_path) if chrome_path else None
         if proxy_url:
             from urllib.parse import urlparse, unquote
             parsed = urlparse(proxy_url)
