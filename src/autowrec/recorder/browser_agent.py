@@ -437,7 +437,7 @@ class BrowserAgent:
         import subprocess
         import sys
         from pathlib import Path
-        path = Path(chrome_path) if not isinstance(chrome_path, Path) else chrome_path
+        path = Path(chrome_path).expanduser() if not isinstance(chrome_path, Path) else chrome_path.expanduser()
         if not path.exists():
             return None
         try:

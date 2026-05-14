@@ -126,7 +126,9 @@ def _build_server():
 
         config.ensure_output_dirs()
 
-        # Resolve zip chrome_path before mutating globals
+        # Normalize tilde paths and resolve zip before mutating globals
+        if chrome_path:
+            chrome_path = os.path.expanduser(chrome_path)
         resolved_chrome_path = chrome_path
         _zip_extract_dir = None
         if chrome_path and chrome_path.lower().endswith(".zip") and os.path.isfile(chrome_path):
@@ -486,6 +488,8 @@ def _build_server():
 
     def _find_chrome_binary(search_dir: str) -> str | None:
         for root, dirs, files in os.walk(search_dir):
+            if "_extract_stage" in root:
+                continue
             for f in files:
                 if f.lower() == "chrome.exe":
                     return os.path.join(root, f)
@@ -612,8 +616,8 @@ def _build_server():
             if not seven_z:
                 return (f"Downloaded to {installer_path}, but 7-Zip is needed to extract.\n"
                         "Install 7-Zip from https://www.7-zip.org/ then re-run download_chrome.")
+            stage1 = os.path.join(dest, "_extract_stage1")
             try:
-                stage1 = os.path.join(dest, "_extract_stage1")
                 os.makedirs(stage1, exist_ok=True)
                 subprocess.run([seven_z, "x", installer_path, f"-o{stage1}", "-y"],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -635,8 +639,6 @@ def _build_server():
                         if f.lower() == "os_update_handler.exe":
                             handler_path = os.path.join(root, f)
                             os.rename(handler_path, handler_path + ".disabled")
-                import shutil
-                shutil.rmtree(stage1, ignore_errors=True)
                 try:
                     os.remove(installer_path)
                 except OSError:
@@ -645,6 +647,10 @@ def _build_server():
                 return f"Extraction failed: {exc}\nExtract {installer_path} manually with 7-Zip."
             except Exception as exc:
                 return f"Extraction error: {exc}"
+            finally:
+                import shutil
+                if os.path.isdir(stage1):
+                    shutil.rmtree(stage1, ignore_errors=True)
         else:
             msg = f"Downloaded to {installer_path}.\n"
             if warning:
